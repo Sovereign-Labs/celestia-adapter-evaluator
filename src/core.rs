@@ -6,6 +6,8 @@ use sov_celestia_adapter::{CelestiaService, DaService};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
+const TOTAL_SUBMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[derive(Debug, Default)]
 pub struct Stats {
     pub success_count: u64,
@@ -56,7 +58,12 @@ async fn submit_blob(
     blob_size_max: usize,
 ) -> anyhow::Result<usize> {
     let blob = generate_random_blob(blob_size_min, blob_size_max);
-    let receipt = celestia_service.send_transaction(&blob).await.await??;
+    let receiver = tokio::time::timeout(
+        TOTAL_SUBMISSION_TIMEOUT,
+        celestia_service.send_transaction(&blob),
+    )
+    .await?;
+    let receipt = tokio::time::timeout(TOTAL_SUBMISSION_TIMEOUT, receiver).await???;
     tracing::debug!(?receipt, "Receipt from sov-celestia-adapter");
     Ok(blob.len())
 }
