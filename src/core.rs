@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
+use anyhow::Context;
 use rand::Rng;
 use sov_celestia_adapter::{CelestiaService, DaService};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
@@ -62,8 +62,11 @@ async fn submit_blob(
         TOTAL_SUBMISSION_TIMEOUT,
         celestia_service.send_transaction(&blob),
     )
-    .await?;
-    let receipt = tokio::time::timeout(TOTAL_SUBMISSION_TIMEOUT, receiver).await???;
+    .await
+    .context("Sending tx")?;
+    let receipt = tokio::time::timeout(TOTAL_SUBMISSION_TIMEOUT, receiver)
+        .await
+        .context("awaiting on channel receiver result")???;
     tracing::debug!(?receipt, "Receipt from sov-celestia-adapter");
     Ok(blob.len())
 }
