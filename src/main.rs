@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::{run_stats_collector, run_submission_loop};
 use clap::Parser;
-use sov_celestia_adapter::{CelestiaConfig, MonitoringConfig, init_metrics_tracker};
+use sov_celestia_adapter::{CelestiaConfig, MonitoringConfig, init_metrics_tracker, DaService};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -80,8 +80,6 @@ async fn main() {
     init_metrics_tracker(&monitoring_config, shutdown_receiver);
 
     tracing::info!("Namespace: {}", args.namespace);
-    tracing::info!("RPC Endpoint: {}", args.rpc_endpoint);
-    tracing::info!("gRPC Endpoint: {}", args.grpc_endpoint);
     // println!("Signer Private Key: {}", args.signer_private_key);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
 
@@ -103,10 +101,16 @@ async fn main() {
     let celestia_service =
         sov_celestia_adapter::CelestiaService::new(celestia_config, params).await;
 
+    let signer_address = celestia_service.get_signer().await.expect("Signer should be set with args.signer_private_key");
+    tracing::info!(%signer_address, "Used address");
     let celestia_service = Arc::new(celestia_service);
     let finish_time = Instant::now() + Duration::from_secs(args.run_for_seconds);
 
     let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+    let max_in_flight = 64;
+    let expected_worst_case_submission_time_secs = 153;
+    let total_submission_timeout = std::time::Duration::from_secs(max_in_flight as u64 * expected_worst_case_submission_time_secs);
 
     let start = std::time::Instant::now();
     let submission_handle = tokio::spawn(run_submission_loop(
@@ -115,8 +119,13 @@ async fn main() {
         result_tx,
         args.blob_size_min,
         args.blob_size_max,
+        max_in_flight,
+        total_submission_timeout,
     ));
-    let stats_handle = tokio::spawn(run_stats_collector(result_rx));
+    let stats_handle = tokio::spawn(run_stats_collector(
+        result_rx,
+        std::time::Duration::from_secs(120), // Print stats every 2 minutes
+    ));
 
     submission_handle.await.unwrap();
     let stats = stats_handle.await.unwrap();
