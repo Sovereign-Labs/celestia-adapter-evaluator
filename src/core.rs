@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-const TOTAL_SUBMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const TOTAL_SUBMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[derive(Debug, Default)]
 pub struct Stats {

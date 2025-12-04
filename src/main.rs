@@ -88,6 +88,9 @@ async fn main() {
     let mut celestia_config = CelestiaConfig::minimal(args.rpc_endpoint)
         .with_submission(args.grpc_endpoint, args.signer_private_key);
     celestia_config.grpc_auth_token = args.grpc_token;
+    celestia_config.backoff_max_times = 3;
+    celestia_config.backoff_min_delay_ms = 1_000;
+    celestia_config.backoff_max_delay_ms = 4_000;
 
     let batch_namespace =
         sov_celestia_adapter::types::Namespace::new_v0(args.namespace.as_bytes()).unwrap();
