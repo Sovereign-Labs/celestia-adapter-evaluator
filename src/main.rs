@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::{run_stats_collector, run_submission_loop};
 use clap::Parser;
-use sov_celestia_adapter::{CelestiaConfig, MonitoringConfig, init_metrics_tracker, DaService};
+use sov_celestia_adapter::{CelestiaConfig, DaService, MonitoringConfig, init_metrics_tracker};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -77,7 +77,7 @@ async fn main() {
     shutdown_receiver.mark_unchanged();
 
     let monitoring_config = MonitoringConfig::standard();
-    init_metrics_tracker(&monitoring_config, shutdown_receiver);
+    init_metrics_tracker(&monitoring_config, shutdown_receiver.clone());
 
     tracing::info!("Namespace: {}", args.namespace);
     // println!("Signer Private Key: {}", args.signer_private_key);
@@ -98,10 +98,17 @@ async fn main() {
         rollup_proof_namespace: proof_namespace,
     };
 
-    let celestia_service =
-        sov_celestia_adapter::CelestiaService::new(celestia_config, params).await;
+    let celestia_service = sov_celestia_adapter::CelestiaService::new(
+        celestia_config,
+        params,
+        shutdown_receiver.clone(),
+    )
+    .await;
 
-    let signer_address = celestia_service.get_signer().await.expect("Signer should be set with args.signer_private_key");
+    let signer_address = celestia_service
+        .get_signer()
+        .await
+        .expect("Signer should be set with args.signer_private_key");
     tracing::info!(%signer_address, "Used address");
     let celestia_service = Arc::new(celestia_service);
     let finish_time = Instant::now() + Duration::from_secs(args.run_for_seconds);
@@ -110,7 +117,9 @@ async fn main() {
 
     let max_in_flight = 64;
     let expected_worst_case_submission_time_secs = 153;
-    let total_submission_timeout = std::time::Duration::from_secs(max_in_flight as u64 * expected_worst_case_submission_time_secs);
+    let total_submission_timeout = std::time::Duration::from_secs(
+        max_in_flight as u64 * expected_worst_case_submission_time_secs,
+    );
 
     let start = std::time::Instant::now();
     let submission_handle = tokio::spawn(run_submission_loop(
