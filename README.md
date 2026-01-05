@@ -58,8 +58,8 @@ cargo run --release -- \
 | Argument          | Default | Description                            |
 |-------------------|---------|----------------------------------------|
 | `--grpc-token`    | None    | Authentication token for gRPC endpoint |
-| `--blob-size-min` | 6 MiB   | Minimum blob size in bytes             |
-| `--blob-size-max` | 6 MiB   | Maximum blob size in bytes             |
+| `--blob-size-min` | 6291456 (6 MiB) | Minimum blob size in bytes             |
+| `--blob-size-max` | 6291456 (6 MiB) | Maximum blob size in bytes             |
 
 ## Output
 
