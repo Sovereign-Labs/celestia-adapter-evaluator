@@ -90,6 +90,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
+name = "arc-swap"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51d03449bb8ca2cc2ef70869af31463d1ae5ccc8fa3e334b307203fbf815207e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -381,8 +390,7 @@ dependencies = [
 [[package]]
 name = "celestia-client"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a531a4ee2468c031980d002ceb86a04fdee189789c661e1c9df7dc749d69ab93"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "async-stream",
  "blockstore",
@@ -409,9 +417,9 @@ dependencies = [
 [[package]]
 name = "celestia-grpc"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe2522aa3348c81630427459ebaa92ec8123a916eec5ba4a85a5c0e850405bc"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
+ "arc-swap",
  "bytes",
  "celestia-grpc-macros",
  "celestia-proto",
@@ -447,8 +455,7 @@ dependencies = [
 [[package]]
 name = "celestia-grpc-macros"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dcb0bf6df15d3834e3814910df891c8f25e17c0d8f7f058fc0ae36c09db70e4"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -458,8 +465,7 @@ dependencies = [
 [[package]]
 name = "celestia-proto"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d4321d7d37b5bcea648e37b24464586267d2fae2cc0b6be1f874801ba875040"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "bytes",
  "prost",
@@ -477,8 +483,7 @@ dependencies = [
 [[package]]
 name = "celestia-rpc"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "652dc7e145490b364fe74a8ace30e2aa7eb0023342182ad700e54bbbd3cbd648"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -499,8 +504,7 @@ dependencies = [
 [[package]]
 name = "celestia-types"
 version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7b60fc62b848cd2085f408ff01d0bc103eb1653f507072f8b1ca586cb7ce1d5"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "base64 0.22.1",
  "bech32",
@@ -2047,8 +2051,7 @@ dependencies = [
 [[package]]
 name = "lumina-utils"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a2be824fb56bbc33720cc7bf9920817f8b1fe54aa2f79300a9e0a390c4cf65c"
+source = "git+https://github.com/eigerco/lumina.git?rev=7f3509263465d3b1f9600a84a0972f98c2f9341a#7f3509263465d3b1f9600a84a0972f98c2f9341a"
 dependencies = [
  "futures",
  "gloo-timers 0.3.0",
@@ -3196,7 +3199,7 @@ dependencies = [
 [[package]]
 name = "sov-celestia-adapter"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3228,7 +3231,7 @@ dependencies = [
 [[package]]
 name = "sov-metrics"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3248,7 +3251,7 @@ dependencies = [
 [[package]]
 name = "sov-modules-macros"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "anyhow",
  "bech32",
@@ -3270,7 +3273,7 @@ dependencies = [
 [[package]]
 name = "sov-rollup-interface"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3295,7 +3298,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "bech32",
  "borsh",
@@ -3311,7 +3314,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macro-helpers"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "bech32",
  "borsh",
@@ -3328,7 +3331,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macros"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=dev#680ee07054a15af7e86a529c6801faecd86792ce"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?branch=nikolai%2Fcelestia-upgrade-simpler-get-ns-data#bb694f26c95d4a3239bdad21fd6c093d8f0390b9"
 dependencies = [
  "proc-macro2",
  "sov-universal-wallet-macro-helpers",
