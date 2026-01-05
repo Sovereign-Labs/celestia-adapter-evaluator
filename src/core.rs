@@ -1,22 +1,30 @@
 use anyhow::Context;
 use rand::Rng;
-use sov_celestia_adapter::{CelestiaService, DaService};
+use sov_celestia_adapter::{BlockHeaderTrait, CelestiaService, DaService};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
+
+pub enum ResultEvent {
+    Submit(anyhow::Result<usize>),
+    Read(anyhow::Result<usize>),
+}
 
 #[derive(Debug, Default)]
 pub struct Stats {
     pub success_count: u64,
     pub error_count: u64,
     pub successful_bytes: usize,
+    pub blocks_read_success: u64,
+    pub block_read_error: u64,
+    pub blobs_read: u64,
 }
 
 pub async fn run_submission_loop(
     celestia_service: Arc<CelestiaService>,
     finish_time: Instant,
-    result_tx: mpsc::UnboundedSender<anyhow::Result<usize>>,
+    result_tx: mpsc::UnboundedSender<ResultEvent>,
     blob_size_min: usize,
     blob_size_max: usize,
     max_in_flight: usize,
@@ -47,7 +55,7 @@ pub async fn run_submission_loop(
                 total_submission_timeout,
             )
             .await;
-            let _ = tx.send(result);
+            let _ = tx.send(ResultEvent::Submit(result));
             drop(permit);
         });
     }
@@ -86,7 +94,7 @@ async fn submit_blob(
 }
 
 pub async fn run_stats_collector(
-    mut result_rx: mpsc::UnboundedReceiver<anyhow::Result<usize>>,
+    mut result_rx: mpsc::UnboundedReceiver<ResultEvent>,
     stats_interval: std::time::Duration,
 ) -> Stats {
     let mut stats = Stats::default();
@@ -98,7 +106,7 @@ pub async fn run_stats_collector(
             biased;
             result = result_rx.recv() => {
                 match result {
-                    Some(Ok(bytes_sent)) => {
+                    Some(ResultEvent::Submit(Ok(bytes_sent))) => {
                         stats.success_count += 1;
                         stats.successful_bytes += bytes_sent;
                         tracing::info!(
@@ -106,13 +114,29 @@ pub async fn run_stats_collector(
                             total_failed = stats.error_count,
                             "Submission succeeded");
                     }
-                    Some(Err(error)) => {
+                    Some(ResultEvent::Submit(Err(error))) => {
                         stats.error_count += 1;
                         tracing::info!(
                             ?error,
                             total_success = stats.success_count,
                             total_failed = stats.error_count,
                             "Submission failed");
+                    }
+                    Some(ResultEvent::Read(Ok(blobs))) => {
+                        stats.blocks_read_success += 1;
+                        stats.blobs_read += blobs as u64;
+                        tracing::info!(
+                            blocks_read_success = stats.blocks_read_success,
+                            blobs_read = stats.blobs_read,
+                            "Block read succeeded");
+                    }
+                    Some(ResultEvent::Read(Err(error))) => {
+                        stats.block_read_error += 1;
+                        tracing::info!(
+                            ?error,
+                            blocks_read_success = stats.blocks_read_success,
+                            block_read_error = stats.block_read_error,
+                            "Block read failed");
                     }
                     None => break,
                 }
@@ -122,6 +146,9 @@ pub async fn run_stats_collector(
                     success_count = stats.success_count,
                     error_count = stats.error_count,
                     successful_bytes = stats.successful_bytes,
+                    blocks_read_success = stats.blocks_read_success,
+                    block_read_error = stats.block_read_error,
+                    blobs_read = stats.blobs_read,
                     "Periodic stats report",
                 );
             }
@@ -129,4 +156,29 @@ pub async fn run_stats_collector(
     }
 
     stats
+}
+
+pub async fn run_reading_loop(
+    celestia_service: Arc<CelestiaService>,
+    finish_time: Instant,
+    result_tx: mpsc::UnboundedSender<ResultEvent>,
+) {
+    let header = celestia_service.get_head_block_header().await.unwrap();
+    let mut height = header.height().checked_add(1).unwrap();
+    while Instant::now() < finish_time {
+        let result = read_block(&celestia_service, height).await;
+        if let Ok(blobs) = &result {
+            height = height.checked_add(1).unwrap();
+            tracing::debug!(height, blobs, "Read block");
+        }
+        let _ = result_tx.send(ResultEvent::Read(result));
+    }
+}
+
+async fn read_block(celestia_service: &CelestiaService, height: u64) -> anyhow::Result<usize> {
+    let block = celestia_service.get_block_at(height).await?;
+    let (relevant_blobs, _) = celestia_service
+        .extract_relevant_blobs_with_proof(&block)
+        .await;
+    Ok(relevant_blobs.batch_blobs.len())
 }

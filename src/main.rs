@@ -3,7 +3,7 @@ mod core;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::core::{run_stats_collector, run_submission_loop};
+use crate::core::{run_reading_loop, run_stats_collector, run_submission_loop};
 use clap::Parser;
 use sov_celestia_adapter::{CelestiaConfig, DaService, MonitoringConfig, init_metrics_tracker};
 use tokio::sync::mpsc;
@@ -123,13 +123,18 @@ async fn main() {
 
     let start = std::time::Instant::now();
     let submission_handle = tokio::spawn(run_submission_loop(
-        celestia_service,
+        celestia_service.clone(),
         finish_time,
-        result_tx,
+        result_tx.clone(),
         args.blob_size_min,
         args.blob_size_max,
         max_in_flight,
         total_submission_timeout,
+    ));
+    let reading_handle = tokio::spawn(run_reading_loop(
+        celestia_service,
+        finish_time,
+        result_tx,
     ));
     let stats_handle = tokio::spawn(run_stats_collector(
         result_rx,
@@ -137,6 +142,7 @@ async fn main() {
     ));
 
     submission_handle.await.unwrap();
+    reading_handle.await.unwrap();
     let stats = stats_handle.await.unwrap();
 
     tracing::info!("=== Final Stats ===");
@@ -154,6 +160,12 @@ async fn main() {
     );
     let throughput_kib_s = stats.successful_bytes as f64 / start.elapsed().as_secs_f64() / 1024.0;
     tracing::info!("Throughput: {throughput_kib_s:.2} KiB/s");
+    tracing::info!(
+        "Blocks read: {} success, {} errors",
+        stats.blocks_read_success,
+        stats.block_read_error
+    );
+    tracing::info!("Blobs read: {}", stats.blobs_read);
 
     shutdown_sender.send(()).unwrap();
 }
