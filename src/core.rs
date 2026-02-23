@@ -1,6 +1,9 @@
 use anyhow::Context;
 use rand::Rng;
-use sov_celestia_adapter::{BlockHeaderTrait, CelestiaService, DaService};
+use sov_celestia_adapter::verifier::CelestiaVerifier;
+use sov_celestia_adapter::{
+    BlobReaderTrait, BlockHeaderTrait, CelestiaService, DaService, DaVerifier, SlotData,
+};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Semaphore, mpsc};
@@ -162,11 +165,12 @@ pub async fn run_reading_loop(
     celestia_service: Arc<CelestiaService>,
     finish_time: Instant,
     result_tx: mpsc::UnboundedSender<ResultEvent>,
+    verifier: CelestiaVerifier,
 ) {
     let header = celestia_service.get_head_block_header().await.unwrap();
     let mut height = header.height().checked_add(1).unwrap();
     while Instant::now() < finish_time {
-        let result = read_block(&celestia_service, height).await;
+        let result = read_block(&celestia_service, height, &verifier).await;
         if let Ok(blobs) = &result {
             height = height.checked_add(1).unwrap();
             tracing::debug!(height, blobs, "Read block");
@@ -175,10 +179,28 @@ pub async fn run_reading_loop(
     }
 }
 
-async fn read_block(celestia_service: &CelestiaService, height: u64) -> anyhow::Result<usize> {
+#[tracing::instrument(skip(celestia_service, verifier), level = "debug")]
+async fn read_block(
+    celestia_service: &CelestiaService,
+    height: u64,
+    verifier: &CelestiaVerifier,
+) -> anyhow::Result<usize> {
     let block = celestia_service.get_block_at(height).await?;
-    let (relevant_blobs, _) = celestia_service
-        .extract_relevant_blobs_with_proof(&block)
+    let mut relevant_blobs = celestia_service.extract_relevant_blobs(&block);
+
+    for blob in relevant_blobs
+        .batch_blobs
+        .iter_mut()
+        .chain(relevant_blobs.proof_blobs.iter_mut())
+    {
+        blob.advance(blob.total_len());
+    }
+
+    let relevant_proofs = celestia_service
+        .get_extraction_proof(&block, &relevant_blobs)
         .await;
+
+    verifier.verify_relevant_tx_list(&block.header(), &relevant_blobs, relevant_proofs)?;
+
     Ok(relevant_blobs.batch_blobs.len())
 }

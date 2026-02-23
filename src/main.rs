@@ -5,7 +5,10 @@ use std::time::{Duration, Instant};
 
 use crate::core::{run_reading_loop, run_stats_collector, run_submission_loop};
 use clap::Parser;
-use sov_celestia_adapter::{CelestiaConfig, DaService, MonitoringConfig, init_metrics_tracker};
+use sov_celestia_adapter::verifier::CelestiaVerifier;
+use sov_celestia_adapter::{
+    CelestiaConfig, DaService, DaVerifier, MonitoringConfig, init_metrics_tracker,
+};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -100,7 +103,7 @@ async fn main() {
 
     let celestia_service = sov_celestia_adapter::CelestiaService::new(
         celestia_config,
-        params,
+        params.clone(),
         shutdown_receiver.clone(),
     )
     .await;
@@ -131,10 +134,12 @@ async fn main() {
         max_in_flight,
         total_submission_timeout,
     ));
+    let verifier = CelestiaVerifier::new(params);
     let reading_handle = tokio::spawn(run_reading_loop(
         celestia_service,
         finish_time,
         result_tx,
+        verifier,
     ));
     let stats_handle = tokio::spawn(run_stats_collector(
         result_rx,
