@@ -17,4 +17,5 @@ tokio = { version = "1.48", features = ["full"] }
 tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
-sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", branch = "dev", features = ["native"] }
+# dev branch on 2026-04-17
+sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "a86fa4c1fb6f511b129c1c35cf0164b20b6c0850", features = ["native"] }
