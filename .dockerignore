@@ -7,3 +7,5 @@ evaluator-branch
 evaluator-dev
 Dockerfile
 .dockerignore
+
+logs/
