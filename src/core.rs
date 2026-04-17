@@ -200,9 +200,6 @@ pub async fn run_reading_loop(
     );
 
     loop {
-        if shutdown_rx.has_changed().unwrap_or(true) {
-            break;
-        }
         match config.finish {
             FinishCondition::AfterInstant(deadline) if Instant::now() >= deadline => break,
             FinishCondition::UntilHeight(uh) if height > uh => {

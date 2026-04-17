@@ -78,7 +78,7 @@ struct SyncAndReadArgs {
     #[arg(long)]
     rpc_endpoint: String,
 
-    /// First block height to read (required).
+    /// First block height to read.
     #[arg(long)]
     from_height: u64,
 
@@ -263,16 +263,8 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
         std::process::exit(2);
     }
 
-    let finish = match (args.until_height, args.run_for_seconds) {
-        (Some(uh), None) => FinishCondition::UntilHeight(uh),
-        (None, Some(s)) => FinishCondition::AfterInstant(Instant::now() + Duration::from_secs(s)),
-        (None, None) => FinishCondition::Forever,
-        (Some(_), Some(_)) => unreachable!("clap conflicts_with enforces mutual exclusion"),
-    };
-
     tracing::info!("Mode: sync-and-read");
     tracing::info!("Namespace: {}", args.namespace);
-    tracing::info!(from_height = args.from_height, ?finish, "Sync parameters");
 
     let celestia_config = CelestiaConfig::minimal(args.rpc_endpoint);
     let params = build_rollup_params(&args.namespace);
@@ -283,6 +275,14 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
     let celestia_service = Arc::new(celestia_service);
 
     let start = Instant::now();
+    let finish = match (args.until_height, args.run_for_seconds) {
+        (Some(uh), None) => FinishCondition::UntilHeight(uh),
+        (None, Some(s)) => FinishCondition::AfterInstant(start + Duration::from_secs(s)),
+        (None, None) => FinishCondition::Forever,
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with enforces mutual exclusion"),
+    };
+    tracing::info!(from_height = args.from_height, ?finish, "Sync parameters");
+
     let (result_tx, result_rx) = mpsc::unbounded_channel();
 
     let verifier = CelestiaVerifier::new(params);
@@ -302,6 +302,15 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
     let stats = stats_handle.await.unwrap();
 
     print_sync_report(&stats, start.elapsed());
+}
+
+fn print_read_stats(stats: &Stats) {
+    tracing::info!(
+        "Blocks read: {} success, {} errors",
+        stats.blocks_read_success,
+        stats.block_read_error
+    );
+    tracing::info!("Blobs read: {}", stats.blobs_read);
 }
 
 fn print_submit_report(stats: &Stats, elapsed: Duration) {
@@ -324,21 +333,11 @@ fn print_submit_report(stats: &Stats, elapsed: Duration) {
     }
     let throughput_kib_s = stats.successful_bytes as f64 / elapsed.as_secs_f64() / 1024.0;
     tracing::info!("Throughput: {throughput_kib_s:.2} KiB/s");
-    tracing::info!(
-        "Blocks read: {} success, {} errors",
-        stats.blocks_read_success,
-        stats.block_read_error
-    );
-    tracing::info!("Blobs read: {}", stats.blobs_read);
+    print_read_stats(stats);
 }
 
 fn print_sync_report(stats: &Stats, elapsed: Duration) {
     tracing::info!("=== Final Stats (sync-and-read) ===");
     tracing::info!("Running time: {:.2?}", elapsed);
-    tracing::info!(
-        "Blocks read: {} success, {} errors",
-        stats.blocks_read_success,
-        stats.block_read_error
-    );
-    tracing::info!("Blobs read: {}", stats.blobs_read);
+    print_read_stats(stats);
 }
