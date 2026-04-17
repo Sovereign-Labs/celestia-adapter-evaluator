@@ -14,6 +14,24 @@ A tool for evaluating the performance of the Sovereign SDK's Celestia adapter by
 cargo build --release
 ```
 
+## Docker
+
+Alternatively, build and run the evaluator in a container. The binary is the image entrypoint, so the same arguments apply:
+
+```bash
+docker build -t celestia-adapter-evaluator .
+
+docker run --rm celestia-adapter-evaluator \
+  --namespace "myrollup00" \
+  --rpc-endpoint "https://<host>" \
+  --grpc-endpoint "https://<host>:9090" \
+  --grpc-token "<token>" \
+  --signer-private-key "<hex-encoded-private-key>" \
+  --run-for-seconds 60
+```
+
+Prebuilt multi-arch images (amd64, arm64) are published to `ghcr.io/sovereign-labs/celestia-adapter-evaluator`, tagged with the short revision of the pinned `sov-celestia-adapter`.
+
 ## Usage
 
 Simple case with local bridge and consensus nodes:
