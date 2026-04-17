@@ -6,7 +6,7 @@ use sov_celestia_adapter::{
 };
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
 
 pub enum ResultEvent {
@@ -161,19 +161,65 @@ pub async fn run_stats_collector(
     stats
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum FinishCondition {
+    /// Stop after successfully reading this height (inclusive).
+    UntilHeight(u64),
+    /// Wall-clock deadline.
+    AfterInstant(Instant),
+    /// Run until shutdown signal.
+    Forever,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReadingLoopConfig {
+    /// If `None`, start from current chain head + 1.
+    pub start_height: Option<u64>,
+    pub finish: FinishCondition,
+}
+
 pub async fn run_reading_loop(
     celestia_service: Arc<CelestiaService>,
-    finish_time: Instant,
+    config: ReadingLoopConfig,
+    mut shutdown_rx: watch::Receiver<()>,
     result_tx: mpsc::UnboundedSender<ResultEvent>,
     verifier: CelestiaVerifier,
 ) {
-    let header = celestia_service.get_head_block_header().await.unwrap();
-    let mut height = header.height().checked_add(1).unwrap();
-    while Instant::now() < finish_time {
-        let result = read_block(&celestia_service, height, &verifier).await;
+    let mut height = match config.start_height {
+        Some(h) => h,
+        None => {
+            let header = celestia_service.get_head_block_header().await.unwrap();
+            header.height().checked_add(1).unwrap()
+        }
+    };
+
+    tracing::info!(
+        start_height = height,
+        finish = ?config.finish,
+        "Starting reading loop"
+    );
+
+    loop {
+        if shutdown_rx.has_changed().unwrap_or(true) {
+            break;
+        }
+        match config.finish {
+            FinishCondition::AfterInstant(deadline) if Instant::now() >= deadline => break,
+            FinishCondition::UntilHeight(uh) if height > uh => {
+                tracing::info!(height, "Reached until_height, stopping reading loop");
+                break;
+            }
+            _ => {}
+        }
+
+        let result = tokio::select! {
+            res = read_block(&celestia_service, height, &verifier) => res,
+            _ = shutdown_rx.changed() => break,
+        };
+
         if let Ok(blobs) = &result {
-            height = height.checked_add(1).unwrap();
             tracing::debug!(height, blobs, "Read block");
+            height = height.checked_add(1).unwrap();
         }
         let _ = result_tx.send(ResultEvent::Read(result));
     }
