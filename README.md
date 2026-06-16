@@ -9,7 +9,7 @@ A tool for exercising the Sovereign SDK's Celestia adapter. It has two modes:
 
 - Rust (edition 2024)
 - Access to a Celestia node (RPC endpoint; gRPC only needed for `submit-and-read`)
-- For `submit-and-read`: a funded Celestia account (private key in hex format)
+- For `submit-and-read`: a funded Celestia account, supplied as either a hex-encoded private key (`--signer-private-key`) or a BIP39 mnemonic (`--signer-mnemonic`, 12 or 24 words, derived via `m/44'/118'/0'/0/0` — the same path used by `cel-key`, Keplr, Leap, and Cosmostation)
 
 ## Building
 
@@ -33,6 +33,18 @@ docker run --rm celestia-adapter-evaluator submit-and-read \
   --run-for-seconds 60
 ```
 
+Or with a BIP39 mnemonic instead of a hex key:
+
+```bash
+docker run --rm celestia-adapter-evaluator submit-and-read \
+  --namespace "myrollup00" \
+  --rpc-endpoint "https://<host>" \
+  --grpc-endpoint "https://<host>:9090" \
+  --grpc-token "<token>" \
+  --signer-mnemonic "word1 word2 ... word24" \
+  --run-for-seconds 60
+```
+
 Prebuilt multi-arch images (amd64, arm64) are published to `ghcr.io/sovereign-labs/celestia-adapter-evaluator`, tagged with the short revision of the pinned `sov-celestia-adapter`.
 
 ## Usage
@@ -49,6 +61,17 @@ cargo run --release -- submit-and-read \
   --rpc-endpoint "http://localhost:26657" \
   --grpc-endpoint "http://localhost:9090" \
   --signer-private-key "<hex-encoded-private-key>" \
+  --run-for-seconds 60
+```
+
+Equivalent run using a BIP39 mnemonic (exactly one signer flag must be provided):
+
+```bash
+cargo run --release -- submit-and-read \
+  --namespace "myrollup00" \
+  --rpc-endpoint "http://localhost:26657" \
+  --grpc-endpoint "http://localhost:9090" \
+  --signer-mnemonic "word1 word2 word3 ... word12" \
   --run-for-seconds 60
 ```
 
@@ -69,16 +92,20 @@ cargo run --release -- submit-and-read \
 
 #### `submit-and-read` arguments
 
-| Argument               | Required | Description                                         |
-|------------------------|----------|-----------------------------------------------------|
-| `--namespace`          | yes      | 10-byte ASCII namespace for the rollup              |
-| `--rpc-endpoint`       | yes      | Celestia node RPC endpoint URL                      |
-| `--grpc-endpoint`      | yes      | Celestia node gRPC endpoint URL                     |
-| `--signer-private-key` | yes      | Hex-encoded private key for signing submissions     |
-| `--run-for-seconds`    | yes      | Duration to run the evaluation                      |
-| `--grpc-token`         | no       | Authentication token for the gRPC endpoint          |
-| `--blob-size-min`      | no       | Minimum blob size in bytes (default 6 MiB)          |
-| `--blob-size-max`      | no       | Maximum blob size in bytes (default 6 MiB)          |
+| Argument               | Required      | Description                                                                     |
+|------------------------|---------------|---------------------------------------------------------------------------------|
+| `--namespace`          | yes           | 10-byte ASCII namespace for the rollup                                          |
+| `--rpc-endpoint`       | yes           | Celestia node RPC endpoint URL                                                  |
+| `--rpc-token`          | no            | Authentication token for the RPC endpoint                                       |
+| `--grpc-endpoint`      | yes           | Celestia node gRPC endpoint URL                                                 |
+| `--signer-private-key` | one of these* | Hex-encoded private key for signing submissions (unarmored hex, 64 chars)       |
+| `--signer-mnemonic`    | one of these* | BIP39 mnemonic (12 or 24 words). Derived via `m/44'/118'/0'/0/0`                |
+| `--run-for-seconds`    | yes           | Duration to run the evaluation                                                  |
+| `--grpc-token`         | no            | Authentication token for the gRPC endpoint                                      |
+| `--blob-size-min`      | no            | Minimum blob size in bytes (default 6 MiB)                                      |
+| `--blob-size-max`      | no            | Maximum blob size in bytes (default 6 MiB)                                      |
+
+\* Exactly one of `--signer-private-key` or `--signer-mnemonic` must be provided.
 
 ### `sync-and-read`
 
@@ -128,6 +155,7 @@ When caught up to the chain head the loop waits for new blocks via the sov-celes
 |-----------------------|----------|--------------------------------------------------------------------------------|
 | `--namespace`         | yes      | 10-byte ASCII namespace for the rollup                                         |
 | `--rpc-endpoint`      | yes      | Celestia node RPC endpoint URL                                                 |
+| `--rpc-token`         | no       | Authentication token for the RPC endpoint                                      |
 | `--from-height`       | yes      | First block height to read                                                     |
 | `--until-height`      | no       | Stop after reading this height (inclusive). Mutually exclusive with `--run-for-seconds` |
 | `--run-for-seconds`   | no       | Wall-clock deadline in seconds. Mutually exclusive with `--until-height`       |

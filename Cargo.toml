@@ -13,9 +13,11 @@ anyhow = "1"
 rand = "0.8"
 clap = { version = "4.5", features = ["derive"] }
 hex = "0.4"
+bip32 = "0.5"
+bip39 = "2"
 tokio = { version = "1.48", features = ["full"] }
 tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 # dev branch on 2026-04-17
-sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "a86fa4c1fb6f511b129c1c35cf0164b20b6c0850", features = ["native"] }
+sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "d0564580790d711c3339eff3648c9df74ca2f401", features = ["native"] }

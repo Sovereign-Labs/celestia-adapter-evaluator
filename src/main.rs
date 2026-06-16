@@ -34,6 +34,11 @@ enum Commands {
 }
 
 #[derive(ClapArgs, Debug)]
+#[command(group(
+    clap::ArgGroup::new("signer")
+        .required(true)
+        .args(["signer_private_key", "signer_mnemonic"])
+))]
 struct SubmitAndReadArgs {
     /// 10-byte ASCII namespace for the rollup.
     #[arg(long, value_parser = validate_namespace)]
@@ -42,6 +47,10 @@ struct SubmitAndReadArgs {
     /// Celestia node RPC endpoint URL.
     #[arg(long)]
     rpc_endpoint: String,
+
+    /// Authentication token for the RPC endpoint.
+    #[arg(long)]
+    rpc_token: Option<String>,
 
     /// Celestia node gRPC endpoint URL.
     #[arg(long)]
@@ -53,7 +62,11 @@ struct SubmitAndReadArgs {
 
     /// Hex-encoded private key for signing submissions.
     #[arg(long, value_parser = validate_hex_string)]
-    signer_private_key: String,
+    signer_private_key: Option<String>,
+
+    /// BIP39 mnemonic (12 or 24 words). Derived via m/44'/118'/0'/0/0.
+    #[arg(long)]
+    signer_mnemonic: Option<String>,
 
     /// Duration to run the evaluation, in seconds.
     #[arg(long)]
@@ -77,6 +90,10 @@ struct SyncAndReadArgs {
     /// Celestia node RPC endpoint URL.
     #[arg(long)]
     rpc_endpoint: String,
+
+    /// Authentication token for the RPC endpoint.
+    #[arg(long)]
+    rpc_token: Option<String>,
 
     /// First block height to read.
     #[arg(long)]
@@ -110,6 +127,19 @@ fn validate_hex_string(s: &str) -> Result<String, String> {
     hex::decode(s)
         .map(|_| s.to_string())
         .map_err(|e| format!("Invalid hex string: {}", e))
+}
+
+fn mnemonic_to_hex(phrase: &str) -> anyhow::Result<String> {
+    let normalized = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mnemonic = bip39::Mnemonic::parse(&normalized)
+        .map_err(|e| anyhow::anyhow!("invalid BIP39 mnemonic: {e}"))?;
+    let seed = mnemonic.to_seed("");
+    let path: bip32::DerivationPath = "m/44'/118'/0'/0/0"
+        .parse()
+        .expect("static HD path is valid");
+    let xprv = bip32::XPrv::derive_from_path(seed, &path)
+        .map_err(|e| anyhow::anyhow!("HD derivation failed: {e}"))?;
+    Ok(hex::encode(xprv.private_key().to_bytes()))
 }
 
 fn build_rollup_params(namespace: &str) -> sov_celestia_adapter::verifier::RollupParams {
@@ -193,8 +223,21 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     tracing::info!("Namespace: {}", args.namespace);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
 
+    let signer_key_hex = match (args.signer_private_key, args.signer_mnemonic) {
+        (Some(hex), None) => hex,
+        (None, Some(m)) => match mnemonic_to_hex(&m) {
+            Ok(hex) => hex,
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(2);
+            }
+        },
+        _ => unreachable!("ArgGroup enforces exactly one signer flag"),
+    };
+
     let mut celestia_config = CelestiaConfig::minimal(args.rpc_endpoint)
-        .with_submission(args.grpc_endpoint, args.signer_private_key);
+        .with_submission(args.grpc_endpoint, signer_key_hex);
+    celestia_config.rpc_auth_token = args.rpc_token;
     celestia_config.grpc_auth_token = args.grpc_token;
     celestia_config.backoff_max_times = 3;
     celestia_config.backoff_min_delay_ms = 1_000;
@@ -209,7 +252,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     let signer_address = celestia_service
         .get_signer()
         .await
-        .expect("Signer should be set with args.signer_private_key");
+        .expect("Signer should be set from --signer-private-key or --signer-mnemonic");
     tracing::info!(%signer_address, "Used address");
 
     let celestia_service = Arc::new(celestia_service);
@@ -266,7 +309,8 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
     tracing::info!("Mode: sync-and-read");
     tracing::info!("Namespace: {}", args.namespace);
 
-    let celestia_config = CelestiaConfig::minimal(args.rpc_endpoint);
+    let mut celestia_config = CelestiaConfig::minimal(args.rpc_endpoint);
+    celestia_config.rpc_auth_token = args.rpc_token;
     let params = build_rollup_params(&args.namespace);
 
     let celestia_service =
@@ -340,4 +384,133 @@ fn print_sync_report(stats: &Stats, elapsed: Duration) {
     tracing::info!("=== Final Stats (sync-and-read) ===");
     tracing::info!("Running time: {:.2?}", elapsed);
     print_read_stats(stats);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands, mnemonic_to_hex};
+    use clap::Parser;
+
+    const TEST_MNEMONIC_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn mnemonic_to_hex_produces_32_byte_hex() {
+        let hex = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        assert_eq!(hex.len(), 64, "expected 64-char hex (32 bytes)");
+        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // Stability snapshot for the canonical BIP39 `abandon ... about` phrase at
+    // Celestia's default path m/44'/118'/0'/0/0. If this ever changes, HD derivation
+    // drifted — cross-check against `cel-key export --unarmored-hex --unsafe` before
+    // updating.
+    #[test]
+    fn mnemonic_to_hex_stability_snapshot() {
+        let hex = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        assert_eq!(
+            hex,
+            "c4a48e2fce1481cd3294b4490f6678090ea98d3d0e5cd984558ab0968741b104"
+        );
+    }
+
+    // BIP39 spec test vector (Trezor python-mnemonic): the seed for the `abandon...about`
+    // 12-word phrase with the canonical "TREZOR" passphrase. Verifies our bip39 crate
+    // produces a spec-compliant seed, which in turn guarantees the downstream HD
+    // derivation matches cel-key / cosmjs / Keplr for any path and any passphrase.
+    #[test]
+    fn mnemonic_seed_matches_bip39_spec_vector() {
+        let mnemonic = bip39::Mnemonic::parse(TEST_MNEMONIC_12).unwrap();
+        let seed = mnemonic.to_seed("TREZOR");
+        assert_eq!(
+            hex::encode(seed),
+            "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04"
+        );
+    }
+
+    #[test]
+    fn mnemonic_to_hex_is_deterministic() {
+        let a = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        let b = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn mnemonic_to_hex_normalizes_whitespace() {
+        let padded = format!("  {}\n  ", TEST_MNEMONIC_12.replace(' ', "   "));
+        let a = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        let b = mnemonic_to_hex(&padded).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn mnemonic_to_hex_changes_with_phrase() {
+        let other = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let a = mnemonic_to_hex(TEST_MNEMONIC_12).unwrap();
+        let b = mnemonic_to_hex(other).unwrap();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn mnemonic_to_hex_rejects_wrong_word_count() {
+        let eleven_words = TEST_MNEMONIC_12.rsplit_once(' ').unwrap().0;
+        assert!(mnemonic_to_hex(eleven_words).is_err());
+    }
+
+    #[test]
+    fn mnemonic_to_hex_rejects_bad_checksum() {
+        let bad = TEST_MNEMONIC_12.replace("about", "abandon");
+        assert!(mnemonic_to_hex(&bad).is_err());
+    }
+
+    #[test]
+    fn mnemonic_to_hex_rejects_unknown_word() {
+        let bad = TEST_MNEMONIC_12.replace("about", "notaword");
+        assert!(mnemonic_to_hex(&bad).is_err());
+    }
+
+    #[test]
+    fn submit_and_read_accepts_rpc_token() {
+        let cli = Cli::parse_from([
+            "celestia-adapter-evaluator",
+            "submit-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--rpc-token",
+            "rpc-secret",
+            "--grpc-endpoint",
+            "http://localhost:9090",
+            "--signer-private-key",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--run-for-seconds",
+            "60",
+        ]);
+
+        let Commands::SubmitAndRead(args) = cli.command else {
+            panic!("expected submit-and-read command");
+        };
+        assert_eq!(args.rpc_token.as_deref(), Some("rpc-secret"));
+    }
+
+    #[test]
+    fn sync_and_read_accepts_rpc_token() {
+        let cli = Cli::parse_from([
+            "celestia-adapter-evaluator",
+            "sync-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--rpc-token",
+            "rpc-secret",
+            "--from-height",
+            "123",
+        ]);
+
+        let Commands::SyncAndRead(args) = cli.command else {
+            panic!("expected sync-and-read command");
+        };
+        assert_eq!(args.rpc_token.as_deref(), Some("rpc-secret"));
+    }
 }

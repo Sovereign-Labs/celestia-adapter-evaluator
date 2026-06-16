@@ -243,7 +243,7 @@ async fn read_block(
         .get_extraction_proof(&block, &relevant_blobs)
         .await;
 
-    verifier.verify_relevant_tx_list(&block.header(), &relevant_blobs, relevant_proofs)?;
+    verifier.verify_relevant_tx_list(block.header(), &relevant_blobs, relevant_proofs)?;
 
     Ok(relevant_blobs.batch_blobs.len())
 }
