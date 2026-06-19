@@ -1,10 +1,12 @@
 use anyhow::Context;
 use rand::Rng;
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use sov_celestia_adapter::verifier::CelestiaVerifier;
 use sov_celestia_adapter::{
     BlobReaderTrait, BlockHeaderTrait, CelestiaService, DaService, DaVerifier, SlotData,
 };
-use std::sync::Arc;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
@@ -28,8 +30,7 @@ pub async fn run_submission_loop(
     celestia_service: Arc<CelestiaService>,
     finish_time: Instant,
     result_tx: mpsc::UnboundedSender<ResultEvent>,
-    blob_size_min: usize,
-    blob_size_max: usize,
+    blob_source: Arc<BlobSource>,
     max_in_flight: usize,
     total_submission_timeout: std::time::Duration,
 ) {
@@ -49,15 +50,10 @@ pub async fn run_submission_loop(
 
         let service = celestia_service.clone();
         let tx = result_tx.clone();
+        let blob_source = blob_source.clone();
 
         submission_tasks.spawn(async move {
-            let result = submit_blob(
-                &service,
-                blob_size_min,
-                blob_size_max,
-                total_submission_timeout,
-            )
-            .await;
+            let result = submit_blob(&service, &blob_source, total_submission_timeout).await;
             let _ = tx.send(ResultEvent::Submit(result));
             drop(permit);
         });
@@ -76,13 +72,92 @@ fn generate_random_blob(blob_size_min: usize, blob_size_max: usize) -> Vec<u8> {
     blob
 }
 
+/// Source of blob payloads for the submission loop.
+pub enum BlobSource {
+    /// Generate random bytes with size in `[min, max]`.
+    Random { min: usize, max: usize },
+    /// Replay stored blobs from a `celestia-blob-downloader` SQLite DB, in `id`
+    /// order, looping back to the start once the end is reached.
+    Database(DbBlobSource),
+}
+
+impl BlobSource {
+    fn next_blob(&self) -> anyhow::Result<Vec<u8>> {
+        match self {
+            BlobSource::Random { min, max } => Ok(generate_random_blob(*min, *max)),
+            BlobSource::Database(db) => db.next_blob(),
+        }
+    }
+}
+
+/// Cyclic, sequential reader over the `blobs` table of a downloaded SQLite DB.
+///
+/// Streams one blob at a time (real blobs are multi-MB and a DB can be many GB)
+/// using a `last_id` cursor behind a [`Mutex`]. Submission cadence is low, so
+/// serializing reads on the mutex is negligible.
+pub struct DbBlobSource {
+    inner: Mutex<DbCursor>,
+}
+
+struct DbCursor {
+    conn: Connection,
+    last_id: i64,
+}
+
+impl DbBlobSource {
+    /// Open the DB read-only and validate it looks like a downloader DB.
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("opening blobs DB at {}", path.display()))?;
+        Self::from_conn(conn)
+    }
+
+    /// Build from an already-open connection. Shared by [`Self::open`] and tests.
+    fn from_conn(conn: Connection) -> anyhow::Result<Self> {
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))
+            .context("querying `blobs` table (is this a celestia-blob-downloader DB?)")?;
+        anyhow::ensure!(count > 0, "blobs DB contains no rows");
+        tracing::info!(blob_count = count, "Opened blobs DB for replay");
+        Ok(Self {
+            inner: Mutex::new(DbCursor { conn, last_id: 0 }),
+        })
+    }
+
+    /// Return the next blob's `data`, advancing the cursor and wrapping to the
+    /// first row once past the last one.
+    fn next_blob(&self) -> anyhow::Result<Vec<u8>> {
+        let mut cur = self.inner.lock().unwrap();
+        let next = cur
+            .conn
+            .query_row(
+                "SELECT id, data FROM blobs WHERE id > ?1 ORDER BY id LIMIT 1",
+                [cur.last_id],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        let (id, data) = match next {
+            Some(row) => row,
+            None => cur
+                .conn
+                .query_row(
+                    "SELECT id, data FROM blobs ORDER BY id LIMIT 1",
+                    [],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
+                )
+                .context("wrapping to first blob")?,
+        };
+        cur.last_id = id;
+        Ok(data)
+    }
+}
+
 async fn submit_blob(
     celestia_service: &CelestiaService,
-    blob_size_min: usize,
-    blob_size_max: usize,
+    blob_source: &BlobSource,
     total_submission_timeout: std::time::Duration,
 ) -> anyhow::Result<usize> {
-    let blob = generate_random_blob(blob_size_min, blob_size_max);
+    let blob = blob_source.next_blob()?;
     let receiver = tokio::time::timeout(
         total_submission_timeout,
         celestia_service.send_transaction(&blob),
@@ -246,4 +321,49 @@ async fn read_block(
     verifier.verify_relevant_tx_list(block.header(), &relevant_blobs, relevant_proofs)?;
 
     Ok(relevant_blobs.batch_blobs.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DbBlobSource;
+    use rusqlite::Connection;
+
+    fn seeded_db(values: &[&[u8]]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE blobs(id INTEGER PRIMARY KEY, data BLOB NOT NULL);")
+            .unwrap();
+        for data in values {
+            conn.execute("INSERT INTO blobs(data) VALUES (?1)", [data])
+                .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn db_blob_source_reads_in_order_and_wraps() {
+        let conn = seeded_db(&[&[1], &[2], &[3]]);
+        let src = DbBlobSource::from_conn(conn).unwrap();
+
+        assert_eq!(src.next_blob().unwrap(), vec![1u8]);
+        assert_eq!(src.next_blob().unwrap(), vec![2u8]);
+        assert_eq!(src.next_blob().unwrap(), vec![3u8]);
+        // Past the last row → wrap back to the first.
+        assert_eq!(src.next_blob().unwrap(), vec![1u8]);
+        assert_eq!(src.next_blob().unwrap(), vec![2u8]);
+    }
+
+    #[test]
+    fn db_blob_source_single_row_repeats() {
+        let conn = seeded_db(&[&[42]]);
+        let src = DbBlobSource::from_conn(conn).unwrap();
+
+        assert_eq!(src.next_blob().unwrap(), vec![42u8]);
+        assert_eq!(src.next_blob().unwrap(), vec![42u8]);
+    }
+
+    #[test]
+    fn db_blob_source_rejects_empty_table() {
+        let conn = seeded_db(&[]);
+        assert!(DbBlobSource::from_conn(conn).is_err());
+    }
 }
