@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::core::{
-    FinishCondition, ReadingLoopConfig, Stats, run_reading_loop, run_stats_collector,
-    run_submission_loop,
+    BlobSource, DbBlobSource, FinishCondition, ReadingLoopConfig, Stats, run_reading_loop,
+    run_stats_collector, run_submission_loop,
 };
 use clap::{Args as ClapArgs, Parser, Subcommand};
 use sov_celestia_adapter::verifier::CelestiaVerifier;
@@ -79,6 +79,12 @@ struct SubmitAndReadArgs {
     /// Maximum submitted blob size in bytes.
     #[arg(long, default_value_t = 6 * 1024 * 1024)]
     blob_size_max: usize,
+
+    /// Path to a celestia-blob-downloader SQLite DB. When set, replay the
+    /// stored blobs sequentially (looping at the end) instead of submitting
+    /// random data. The `--blob-size-*` flags are ignored in this mode.
+    #[arg(long)]
+    blobs_db: Option<std::path::PathBuf>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -266,12 +272,28 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     let total_submission_timeout =
         Duration::from_secs(max_in_flight as u64 * expected_worst_case_submission_time_secs);
 
+    let blob_source = match args.blobs_db {
+        Some(path) => match DbBlobSource::open(&path) {
+            Ok(db) => {
+                tracing::info!(path = %path.display(), "Replaying blobs from downloaded DB");
+                Arc::new(BlobSource::Database(db))
+            }
+            Err(e) => {
+                eprintln!("Failed to open --blobs-db: {e:#}");
+                std::process::exit(2);
+            }
+        },
+        None => Arc::new(BlobSource::Random {
+            min: args.blob_size_min,
+            max: args.blob_size_max,
+        }),
+    };
+
     let submission_handle = tokio::spawn(run_submission_loop(
         celestia_service.clone(),
         finish_time,
         result_tx.clone(),
-        args.blob_size_min,
-        args.blob_size_max,
+        blob_source,
         max_in_flight,
         total_submission_timeout,
     ));
