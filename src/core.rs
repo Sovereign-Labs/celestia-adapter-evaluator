@@ -33,16 +33,25 @@ pub async fn run_submission_loop(
     blob_source: Arc<BlobSource>,
     max_in_flight: usize,
     total_submission_timeout: std::time::Duration,
+    mut shutdown_rx: watch::Receiver<()>,
 ) {
     tracing::info!(max_in_flight, "Starting submission loop");
     let mut submission_tasks = JoinSet::new();
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(6));
     let semaphore = Arc::new(Semaphore::new(max_in_flight));
 
+    // A `watch` change is only observed once, so record it in a flag and break.
+    let mut shutting_down = false;
     while Instant::now() < finish_time {
-        interval.tick().await;
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown_rx.changed() => { shutting_down = true; break; }
+        }
 
-        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let permit = tokio::select! {
+            permit = semaphore.clone().acquire_owned() => permit.unwrap(),
+            _ = shutdown_rx.changed() => { shutting_down = true; break; }
+        };
         tracing::info!(
             available_permits = semaphore.available_permits(),
             "Kicking off new submission task"
@@ -61,6 +70,23 @@ pub async fn run_submission_loop(
 
     drop(result_tx);
 
+    if shutting_down {
+        let grace = std::time::Duration::from_secs(5);
+        tracing::info!(?grace, "Shutdown requested; waiting briefly for in-flight submissions");
+        let drained = tokio::time::timeout(grace, async {
+            while submission_tasks.join_next().await.is_some() {}
+        })
+        .await;
+        if drained.is_err() {
+            tracing::warn!(
+                in_flight = submission_tasks.len(),
+                "Grace period elapsed; aborting remaining submission tasks"
+            );
+            submission_tasks.abort_all();
+        }
+    }
+
+    // Final drain: no-op if already drained; quickly reaps aborted tasks otherwise.
     while submission_tasks.join_next().await.is_some() {}
 }
 

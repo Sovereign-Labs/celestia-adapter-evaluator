@@ -296,6 +296,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
         blob_source,
         max_in_flight,
         total_submission_timeout,
+        shutdown_rx.clone(),
     ));
     let verifier = CelestiaVerifier::new(params);
     let reading_handle = tokio::spawn(run_reading_loop(
