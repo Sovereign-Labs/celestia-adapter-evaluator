@@ -3188,7 +3188,7 @@ dependencies = [
 [[package]]
 name = "sov-celestia-adapter"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3221,7 +3221,7 @@ dependencies = [
 [[package]]
 name = "sov-metrics"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3240,7 +3240,7 @@ dependencies = [
 [[package]]
 name = "sov-modules-macros"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "anyhow",
  "bech32",
@@ -3262,7 +3262,7 @@ dependencies = [
 [[package]]
 name = "sov-rollup-interface"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3287,7 +3287,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet"
 version = "0.4.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "bech32",
  "borsh",
@@ -3303,7 +3303,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macro-helpers"
 version = "0.4.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "bech32",
  "borsh",
@@ -3318,7 +3318,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macros"
 version = "0.4.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=76172cff77bbc072d095415693961c501576e424#76172cff77bbc072d095415693961c501576e424"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=66e43cb15ed3b8938ab7bb44523baf49a4e79ed0#66e43cb15ed3b8938ab7bb44523baf49a4e79ed0"
 dependencies = [
  "sov-universal-wallet-macro-helpers",
  "syn 2.0.118",
