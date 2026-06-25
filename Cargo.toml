@@ -21,5 +21,5 @@ tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 # dev branch on 2026-06-25
-sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "a1cd46bf102b506e1dd28767c11ec136e7bf0fa3", features = ["native"] }
-sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "a1cd46bf102b506e1dd28767c11ec136e7bf0fa3", features = ["native"] }
+sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "981915cb006a868c394597ff20bdc92e3b2826aa", features = ["native"] }
+sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "981915cb006a868c394597ff20bdc92e3b2826aa", features = ["native"] }
