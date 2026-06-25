@@ -104,6 +104,7 @@ cargo run --release -- submit-and-read \
 | `--grpc-token`         | no            | Authentication token for the gRPC endpoint                                      |
 | `--blob-size-min`      | no            | Minimum blob size in bytes (default 6 MiB)                                      |
 | `--blob-size-max`      | no            | Maximum blob size in bytes (default 6 MiB)                                      |
+| `--compression-chunk-size` | no        | Target uncompressed chunk size (bytes) for the LZ4 envelope; only affects `--compression lz4`. Range 1..=16384, default 482 |
 
 \* Exactly one of `--signer-private-key` or `--signer-mnemonic` must be provided.
 

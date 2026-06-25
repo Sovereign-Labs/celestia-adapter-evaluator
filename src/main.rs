@@ -7,10 +7,10 @@ use crate::core::{
     BlobSource, DbBlobSource, FinishCondition, ReadingLoopConfig, Stats, run_reading_loop,
     run_stats_collector, run_submission_loop,
 };
-use clap::{Args as ClapArgs, Parser, Subcommand};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use sov_celestia_adapter::verifier::CelestiaVerifier;
 use sov_celestia_adapter::{
-    CelestiaConfig, DaService, DaVerifier, MonitoringConfig, init_metrics_tracker,
+    CelestiaConfig, CompressOnSubmit, DaService, DaVerifier, MonitoringConfig, init_metrics_tracker,
 };
 use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
@@ -31,6 +31,25 @@ enum Commands {
     SubmitAndRead(SubmitAndReadArgs),
     /// Read-only: sync blobs from a namespace starting at a given height.
     SyncAndRead(SyncAndReadArgs),
+}
+
+/// CLI selector mirroring [`CompressOnSubmit`]. Kept separate so we can derive
+/// `ValueEnum` without touching the SDK type.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CompressionArg {
+    /// Post batch blobs verbatim.
+    Off,
+    /// Wrap batch blobs in a chunked LZ4 envelope when it is smaller than raw.
+    Lz4,
+}
+
+impl From<CompressionArg> for CompressOnSubmit {
+    fn from(arg: CompressionArg) -> Self {
+        match arg {
+            CompressionArg::Off => CompressOnSubmit::Off,
+            CompressionArg::Lz4 => CompressOnSubmit::Lz4,
+        }
+    }
 }
 
 #[derive(ClapArgs, Debug)]
@@ -85,6 +104,19 @@ struct SubmitAndReadArgs {
     /// random data. The `--blob-size-*` flags are ignored in this mode.
     #[arg(long)]
     blobs_db: Option<std::path::PathBuf>,
+
+    /// Batch-blob compression mode on submit. When omitted, the
+    /// `CelestiaConfig` default (currently `off`) is used.
+    #[arg(long, value_enum)]
+    compression: Option<CompressionArg>,
+
+    /// Target uncompressed chunk size (bytes) for the LZ4 compression envelope.
+    /// Only has an effect together with `--compression lz4`. When omitted, the
+    /// `CelestiaConfig` default (currently 482, one continuation share) is used.
+    /// Out-of-range values (valid range is 1..=16384) are rejected by the adapter
+    /// at startup.
+    #[arg(long)]
+    compression_chunk_size: Option<usize>,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -248,6 +280,12 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     celestia_config.backoff_max_times = 3;
     celestia_config.backoff_min_delay_ms = 1_000;
     celestia_config.backoff_max_delay_ms = 4_000;
+    if let Some(compression) = args.compression {
+        celestia_config.compression = compression.into();
+    }
+    if let Some(chunk_size) = args.compression_chunk_size {
+        celestia_config.compression_chunk_size = chunk_size;
+    }
 
     let params = build_rollup_params(&args.namespace);
 
@@ -411,7 +449,7 @@ fn print_sync_report(stats: &Stats, elapsed: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, mnemonic_to_hex};
+    use super::{Cli, Commands, CompressionArg, mnemonic_to_hex};
     use clap::Parser;
 
     const TEST_MNEMONIC_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -514,6 +552,104 @@ mod tests {
             panic!("expected submit-and-read command");
         };
         assert_eq!(args.rpc_token.as_deref(), Some("rpc-secret"));
+    }
+
+    fn submit_and_read_args(extra: &[&str]) -> super::SubmitAndReadArgs {
+        let base = [
+            "celestia-adapter-evaluator",
+            "submit-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--grpc-endpoint",
+            "http://localhost:9090",
+            "--signer-private-key",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--run-for-seconds",
+            "60",
+        ];
+        let cli = Cli::parse_from(base.iter().chain(extra).copied());
+        let Commands::SubmitAndRead(args) = cli.command else {
+            panic!("expected submit-and-read command");
+        };
+        args
+    }
+
+    #[test]
+    fn compression_defaults_to_none() {
+        // Omitting the flag leaves the config default untouched.
+        assert!(submit_and_read_args(&[]).compression.is_none());
+    }
+
+    #[test]
+    fn compression_parses_lz4() {
+        let args = submit_and_read_args(&["--compression", "lz4"]);
+        assert!(matches!(args.compression, Some(CompressionArg::Lz4)));
+    }
+
+    #[test]
+    fn compression_parses_off() {
+        let args = submit_and_read_args(&["--compression", "off"]);
+        assert!(matches!(args.compression, Some(CompressionArg::Off)));
+    }
+
+    #[test]
+    fn compression_rejects_unknown_value() {
+        let result = Cli::try_parse_from([
+            "celestia-adapter-evaluator",
+            "submit-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--grpc-endpoint",
+            "http://localhost:9090",
+            "--signer-private-key",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--run-for-seconds",
+            "60",
+            "--compression",
+            "gzip",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compression_chunk_size_defaults_to_none() {
+        // Omitting the flag leaves the config default untouched.
+        assert!(
+            submit_and_read_args(&[])
+                .compression_chunk_size
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn compression_chunk_size_parses_value() {
+        let args = submit_and_read_args(&["--compression-chunk-size", "1024"]);
+        assert_eq!(args.compression_chunk_size, Some(1024));
+    }
+
+    #[test]
+    fn compression_chunk_size_rejects_non_numeric() {
+        let result = Cli::try_parse_from([
+            "celestia-adapter-evaluator",
+            "submit-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--grpc-endpoint",
+            "http://localhost:9090",
+            "--signer-private-key",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--run-for-seconds",
+            "60",
+            "--compression-chunk-size",
+            "abc",
+        ]);
+        assert!(result.is_err());
     }
 
     #[test]

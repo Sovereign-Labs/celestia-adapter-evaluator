@@ -1,0 +1,10 @@
+[constants]
+CELESTIA_MAX_ROLLUP_CHUNK_LEN = { const = 16384 }
+# Celestia compression — max COMPRESSED (on-DA) bytes in one envelope chunk: sized so a single
+# chunk never spills past the FIRST Celestia share. Bounds how many shares a single chunk read
+# forces the prover to authenticate in ZK (DoS protection against spam that overloads the prover).
+# 430 = one signed-v1 first share (458 payload bytes) minus the 24-byte envelope header minus the
+# 4-byte chunk header. Conservative: the first chunk is the tightest (it follows the envelope
+# header), so capping it here keeps a chunk read to a single authenticated share. Consensus-relevant
+# — same rules as above.
+CELESTIA_MAX_COMPRESSED_CHUNK_SIZE = { const = 430 }
