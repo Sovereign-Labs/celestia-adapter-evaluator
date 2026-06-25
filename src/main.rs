@@ -12,7 +12,8 @@ use sov_celestia_adapter::verifier::CelestiaVerifier;
 use sov_celestia_adapter::{
     CelestiaConfig, CompressOnSubmit, DaService, DaVerifier, MonitoringConfig, init_metrics_tracker,
 };
-use tokio::sync::{mpsc, watch};
+use sov_rollup_interface::node::SecondaryShutdownController;
+use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 const STATS_INTERVAL: Duration = Duration::from_secs(120);
@@ -190,7 +191,7 @@ fn build_rollup_params(namespace: &str) -> sov_celestia_adapter::verifier::Rollu
     }
 }
 
-fn spawn_signal_listener(shutdown_sender: Arc<watch::Sender<()>>) {
+fn spawn_signal_listener(shutdown_controller: SecondaryShutdownController) {
     tokio::spawn(async move {
         let ctrl_c = async {
             if let Err(e) = tokio::signal::ctrl_c().await {
@@ -219,7 +220,7 @@ fn spawn_signal_listener(shutdown_sender: Arc<watch::Sender<()>>) {
             _ = ctrl_c => tracing::info!("Received Ctrl+C, initiating shutdown"),
             _ = terminate => tracing::info!("Received SIGTERM, initiating shutdown"),
         }
-        let _ = shutdown_sender.send(());
+        shutdown_controller.shutdown();
     });
 }
 
@@ -239,24 +240,22 @@ async fn main() {
 
     let cli = Cli::parse();
 
-    let (shutdown_sender, mut shutdown_receiver) = watch::channel(());
-    shutdown_receiver.mark_unchanged();
-    let shutdown_sender = Arc::new(shutdown_sender);
+    let shutdown_controller = SecondaryShutdownController::new();
 
-    spawn_signal_listener(shutdown_sender.clone());
+    spawn_signal_listener(shutdown_controller.clone());
 
     let monitoring_config = MonitoringConfig::standard();
-    init_metrics_tracker(&monitoring_config, shutdown_receiver.clone());
+    let _ = init_metrics_tracker(&monitoring_config, &shutdown_controller);
 
     match cli.command {
-        Commands::SubmitAndRead(args) => run_submit_and_read(args, shutdown_receiver).await,
-        Commands::SyncAndRead(args) => run_sync_and_read(args, shutdown_receiver).await,
+        Commands::SubmitAndRead(args) => run_submit_and_read(args, &shutdown_controller).await,
+        Commands::SyncAndRead(args) => run_sync_and_read(args, &shutdown_controller).await,
     }
 
-    let _ = shutdown_sender.send(());
+    shutdown_controller.shutdown();
 }
 
-async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiver<()>) {
+async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_controller: &SecondaryShutdownController) {
     tracing::info!("Mode: submit-and-read");
     tracing::info!("Namespace: {}", args.namespace);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
@@ -290,7 +289,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     let params = build_rollup_params(&args.namespace);
 
     let celestia_service =
-        sov_celestia_adapter::CelestiaService::new(celestia_config, params, shutdown_rx.clone())
+        sov_celestia_adapter::CelestiaService::new(celestia_config, params, shutdown_controller)
             .await;
 
     let signer_address = celestia_service
@@ -334,7 +333,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
         blob_source,
         max_in_flight,
         total_submission_timeout,
-        shutdown_rx.clone(),
+        shutdown_controller.clone(),
     ));
     let verifier = CelestiaVerifier::new(params);
     let reading_handle = tokio::spawn(run_reading_loop(
@@ -343,7 +342,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
             start_height: None,
             finish: FinishCondition::AfterInstant(finish_time),
         },
-        shutdown_rx,
+        shutdown_controller.clone(),
         result_tx,
         verifier,
     ));
@@ -356,7 +355,7 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_rx: watch::Receiv
     print_submit_report(&stats, start.elapsed());
 }
 
-async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<()>) {
+async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_controller: &SecondaryShutdownController) {
     if let Some(until) = args.until_height
         && args.from_height > until
     {
@@ -375,7 +374,7 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
     let params = build_rollup_params(&args.namespace);
 
     let celestia_service =
-        sov_celestia_adapter::CelestiaService::new(celestia_config, params, shutdown_rx.clone())
+        sov_celestia_adapter::CelestiaService::new(celestia_config, params, shutdown_controller)
             .await;
     let celestia_service = Arc::new(celestia_service);
 
@@ -397,7 +396,7 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_rx: watch::Receiver<(
             start_height: Some(args.from_height),
             finish,
         },
-        shutdown_rx,
+        shutdown_controller.clone(),
         result_tx,
         verifier,
     ));

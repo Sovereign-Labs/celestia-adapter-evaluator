@@ -5,10 +5,11 @@ use sov_celestia_adapter::verifier::CelestiaVerifier;
 use sov_celestia_adapter::{
     BlobReaderTrait, BlockHeaderTrait, CelestiaService, DaService, DaVerifier, SlotData,
 };
+use sov_rollup_interface::node::SecondaryShutdownController;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tokio::sync::{Semaphore, mpsc, watch};
+use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 pub enum ResultEvent {
@@ -33,24 +34,25 @@ pub async fn run_submission_loop(
     blob_source: Arc<BlobSource>,
     max_in_flight: usize,
     total_submission_timeout: std::time::Duration,
-    mut shutdown_rx: watch::Receiver<()>,
+    shutdown_controller: SecondaryShutdownController,
 ) {
     tracing::info!(max_in_flight, "Starting submission loop");
     let mut submission_tasks = JoinSet::new();
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(6));
     let semaphore = Arc::new(Semaphore::new(max_in_flight));
 
-    // A `watch` change is only observed once, so record it in a flag and break.
+    // Record shutdown in a flag and break so we can drain in-flight submissions
+    // (with a grace period) before returning.
     let mut shutting_down = false;
     while Instant::now() < finish_time {
         tokio::select! {
             _ = interval.tick() => {}
-            _ = shutdown_rx.changed() => { shutting_down = true; break; }
+            _ = shutdown_controller.wait_for_shutdown() => { shutting_down = true; break; }
         }
 
         let permit = tokio::select! {
             permit = semaphore.clone().acquire_owned() => permit.unwrap(),
-            _ = shutdown_rx.changed() => { shutting_down = true; break; }
+            _ = shutdown_controller.wait_for_shutdown() => { shutting_down = true; break; }
         };
         tracing::info!(
             available_permits = semaphore.available_permits(),
@@ -282,7 +284,7 @@ pub struct ReadingLoopConfig {
 pub async fn run_reading_loop(
     celestia_service: Arc<CelestiaService>,
     config: ReadingLoopConfig,
-    mut shutdown_rx: watch::Receiver<()>,
+    shutdown_controller: SecondaryShutdownController,
     result_tx: mpsc::UnboundedSender<ResultEvent>,
     verifier: CelestiaVerifier,
 ) {
@@ -312,7 +314,7 @@ pub async fn run_reading_loop(
 
         let result = tokio::select! {
             res = read_block(&celestia_service, height, &verifier) => res,
-            _ = shutdown_rx.changed() => break,
+            _ = shutdown_controller.wait_for_shutdown() => break,
         };
 
         if let Ok(blobs) = &result {
