@@ -67,15 +67,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract SDK revision
-        id: sdk
+      - name: Compute repo commit tag
+        id: commit
         run: |
-          full=$(sed -n '/sov-celestia-adapter[[:space:]]*=/,/}/p' Cargo.toml \
-                 | grep -oE 'rev[[:space:]]*=[[:space:]]*"[^"]+"' \
-                 | head -1 \
-                 | sed -E 's/.*"([^"]+)".*/\1/')
+          full="${{ github.sha }}"
           if [ -z "$full" ]; then
-            echo "::error::Failed to extract sov-celestia-adapter rev from Cargo.toml"
+            echo "::error::Failed to resolve repository commit SHA"
             exit 1
           fi
           echo "short=${full:0:12}" >> "$GITHUB_OUTPUT"
@@ -107,10 +104,10 @@ jobs:
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
-            -t "${{ steps.img.outputs.name }}:${{ steps.sdk.outputs.short }}" \
+            -t "${{ steps.img.outputs.name }}:${{ steps.commit.outputs.short }}" \
             $(printf "${{ steps.img.outputs.name }}@sha256:%s " *)
 
       - name: Inspect
         run: |
           docker buildx imagetools inspect \
-            "${{ steps.img.outputs.name }}:${{ steps.sdk.outputs.short }}"
+            "${{ steps.img.outputs.name }}:${{ steps.commit.outputs.short }}"
