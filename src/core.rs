@@ -8,13 +8,22 @@ use sov_celestia_adapter::{
 use sov_rollup_interface::node::SecondaryShutdownController;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tendermint_rpc::HttpClient;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
+
+use crate::consensus;
+use crate::metrics::{self, ConsensusReadMeasurement, DaArchivalReadMeasurement};
 
 pub enum ResultEvent {
     Submit(anyhow::Result<usize>),
     Read(anyhow::Result<usize>),
+    /// One historical `block_results` read on the consensus RPC.
+    ConsensusRead(anyhow::Result<()>),
+    /// One archival `get_block_at` read on the DA (bridge) node. `Ok` carries the
+    /// number of batch blobs read at that height.
+    ArchivalRead(anyhow::Result<usize>),
 }
 
 #[derive(Debug, Default)]
@@ -25,6 +34,11 @@ pub struct Stats {
     pub blocks_read_success: u64,
     pub block_read_error: u64,
     pub blobs_read: u64,
+    pub consensus_reads_success: u64,
+    pub consensus_reads_error: u64,
+    pub da_archival_reads_success: u64,
+    pub da_archival_reads_error: u64,
+    pub da_archival_blobs_read: u64,
 }
 
 pub async fn run_submission_loop(
@@ -74,7 +88,10 @@ pub async fn run_submission_loop(
 
     if shutting_down {
         let grace = std::time::Duration::from_secs(5);
-        tracing::info!(?grace, "Shutdown requested; waiting briefly for in-flight submissions");
+        tracing::info!(
+            ?grace,
+            "Shutdown requested; waiting briefly for in-flight submissions"
+        );
         let drained = tokio::time::timeout(grace, async {
             while submission_tasks.join_next().await.is_some() {}
         })
@@ -168,11 +185,9 @@ impl DbBlobSource {
             Some(row) => row,
             None => cur
                 .conn
-                .query_row(
-                    "SELECT id, data FROM blobs ORDER BY id LIMIT 1",
-                    [],
-                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)),
-                )
+                .query_row("SELECT id, data FROM blobs ORDER BY id LIMIT 1", [], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
+                })
                 .context("wrapping to first blob")?,
         };
         cur.last_id = id;
@@ -244,6 +259,36 @@ pub async fn run_stats_collector(
                             block_read_error = stats.block_read_error,
                             "Block read failed");
                     }
+                    Some(ResultEvent::ConsensusRead(Ok(()))) => {
+                        stats.consensus_reads_success += 1;
+                        tracing::debug!(
+                            consensus_reads_success = stats.consensus_reads_success,
+                            "Consensus block_results read succeeded");
+                    }
+                    Some(ResultEvent::ConsensusRead(Err(error))) => {
+                        stats.consensus_reads_error += 1;
+                        tracing::info!(
+                            ?error,
+                            consensus_reads_success = stats.consensus_reads_success,
+                            consensus_reads_error = stats.consensus_reads_error,
+                            "Consensus block_results read failed");
+                    }
+                    Some(ResultEvent::ArchivalRead(Ok(blobs))) => {
+                        stats.da_archival_reads_success += 1;
+                        stats.da_archival_blobs_read += blobs as u64;
+                        tracing::debug!(
+                            da_archival_reads_success = stats.da_archival_reads_success,
+                            blobs,
+                            "DA archival read succeeded");
+                    }
+                    Some(ResultEvent::ArchivalRead(Err(error))) => {
+                        stats.da_archival_reads_error += 1;
+                        tracing::info!(
+                            ?error,
+                            da_archival_reads_success = stats.da_archival_reads_success,
+                            da_archival_reads_error = stats.da_archival_reads_error,
+                            "DA archival read failed");
+                    }
                     None => break,
                 }
             }
@@ -255,6 +300,11 @@ pub async fn run_stats_collector(
                     blocks_read_success = stats.blocks_read_success,
                     block_read_error = stats.block_read_error,
                     blobs_read = stats.blobs_read,
+                    consensus_reads_success = stats.consensus_reads_success,
+                    consensus_reads_error = stats.consensus_reads_error,
+                    da_archival_reads_success = stats.da_archival_reads_success,
+                    da_archival_reads_error = stats.da_archival_reads_error,
+                    da_archival_blobs_read = stats.da_archival_blobs_read,
                     "Periodic stats report",
                 );
             }
@@ -349,6 +399,150 @@ async fn read_block(
     verifier.verify_relevant_tx_list(block.header(), &relevant_blobs, relevant_proofs)?;
 
     Ok(relevant_blobs.batch_blobs.len())
+}
+
+/// Shared configuration for the random historical / archival read loops.
+#[derive(Debug, Clone, Copy)]
+pub struct RandomReadConfig {
+    /// Inclusive lower bound of the random height range.
+    pub from_height: u64,
+    /// Inclusive upper bound of the random height range.
+    pub to_height: u64,
+    /// Delay between kicking off successive reads.
+    pub interval: Duration,
+    /// Max concurrent in-flight reads.
+    pub max_in_flight: usize,
+    /// Optional wall-clock deadline; the loop also stops on shutdown.
+    pub deadline: Option<Instant>,
+}
+
+/// Generic random-read loop. Each tick picks a uniform-random height in
+/// `[from_height, to_height]` and runs `read_at(height)` for it, bounded by
+/// `interval` (cadence), `max_in_flight` (concurrency), an optional wall-clock
+/// deadline, and shutdown; every produced [`ResultEvent`] is forwarded to the
+/// stats collector. The per-height operation — which node it hits, what it
+/// measures, and which `ResultEvent` it yields — is supplied entirely by
+/// `read_at`; the two implementations are [`consensus_read_once`] and
+/// [`da_read_once`]. Mirrors [`run_submission_loop`]'s interval + semaphore +
+/// drained `JoinSet` shape.
+pub async fn run_random_read_loop<F, Fut>(
+    name: &'static str,
+    config: RandomReadConfig,
+    shutdown_controller: SecondaryShutdownController,
+    result_tx: mpsc::UnboundedSender<ResultEvent>,
+    read_at: F,
+) where
+    F: Fn(u64) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ResultEvent> + Send + 'static,
+{
+    if config.from_height > config.to_height {
+        tracing::warn!(
+            read_loop = name,
+            from = config.from_height,
+            to = config.to_height,
+            "Empty height range; read loop not started"
+        );
+        return;
+    }
+
+    tracing::info!(
+        read_loop = name,
+        from = config.from_height,
+        to = config.to_height,
+        interval_ms = config.interval.as_millis(),
+        max_in_flight = config.max_in_flight,
+        "Starting random read loop"
+    );
+
+    let semaphore = Arc::new(Semaphore::new(config.max_in_flight));
+    let mut interval = tokio::time::interval(config.interval);
+    let mut tasks = JoinSet::new();
+    let mut shutting_down = false;
+
+    loop {
+        if let Some(deadline) = config.deadline
+            && Instant::now() >= deadline
+        {
+            break;
+        }
+
+        tokio::select! {
+            _ = interval.tick() => {}
+            _ = shutdown_controller.wait_for_shutdown() => { shutting_down = true; break; }
+        }
+
+        let permit = tokio::select! {
+            permit = semaphore.clone().acquire_owned() => permit.unwrap(),
+            _ = shutdown_controller.wait_for_shutdown() => { shutting_down = true; break; }
+        };
+
+        let height = rand::thread_rng().gen_range(config.from_height..=config.to_height);
+        let fut = read_at(height);
+        let tx = result_tx.clone();
+
+        tasks.spawn(async move {
+            let event = fut.await;
+            let _ = tx.send(event);
+            drop(permit);
+        });
+    }
+
+    if shutting_down {
+        tracing::info!(
+            read_loop = name,
+            "Shutdown requested; draining in-flight reads"
+        );
+    }
+    while tasks.join_next().await.is_some() {}
+}
+
+/// One consensus `block_results` read: time it, emit the Telegraf measurement,
+/// and map it to a [`ResultEvent::ConsensusRead`]. The consensus implementation
+/// of [`run_random_read_loop`]'s `read_at`.
+pub async fn consensus_read_once(http: &HttpClient, height: u64) -> ResultEvent {
+    let start = Instant::now();
+    let result = consensus::read_block_results(http, height).await;
+    let response_time_us = start.elapsed().as_micros();
+
+    let (is_success, num_txs, num_events, event) = match result {
+        Ok(summary) => (true, summary.num_txs, summary.num_events, Ok(())),
+        Err(error) => (false, 0, 0, Err(error)),
+    };
+
+    metrics::emit(ConsensusReadMeasurement {
+        is_success,
+        height,
+        response_time_us,
+        num_txs,
+        num_events,
+    });
+    ResultEvent::ConsensusRead(event)
+}
+
+/// One archival `get_block_at` read via the adapter (the same [`read_block`]
+/// path the sequential sync loop uses): time it, emit the Telegraf measurement,
+/// and map it to a [`ResultEvent::ArchivalRead`]. The DA implementation of
+/// [`run_random_read_loop`]'s `read_at`.
+pub async fn da_read_once(
+    celestia_service: &CelestiaService,
+    verifier: &CelestiaVerifier,
+    height: u64,
+) -> ResultEvent {
+    let start = Instant::now();
+    let result = read_block(celestia_service, height, verifier).await;
+    let response_time_us = start.elapsed().as_micros();
+
+    let (is_success, blob_count) = match &result {
+        Ok(blobs) => (true, *blobs as u64),
+        Err(_) => (false, 0),
+    };
+    metrics::emit(DaArchivalReadMeasurement {
+        is_success,
+        height,
+        response_time_us,
+        blob_count,
+    });
+    ResultEvent::ArchivalRead(result)
 }
 
 #[cfg(test)]

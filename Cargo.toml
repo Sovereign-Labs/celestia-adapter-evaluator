@@ -20,6 +20,13 @@ tokio = { version = "1.48", features = ["full"] }
 tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
+# CometBFT consensus RPC client for the historical `block_results` read loop.
+tendermint = "0.40"
+tendermint-rpc = { version = "0.40", features = ["http-client"] }
+
 # dev branch on 2026-06-25
 sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "981915cb006a868c394597ff20bdc92e3b2826aa", features = ["native"] }
 sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "981915cb006a868c394597ff20bdc92e3b2826aa", features = ["native"] }
+# Direct handle on the metrics pipeline so we can emit our own measurements
+# (block_results reads) through the same Telegraf tracker the adapter initializes.
+sov-metrics = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "981915cb006a868c394597ff20bdc92e3b2826aa", features = ["native"] }

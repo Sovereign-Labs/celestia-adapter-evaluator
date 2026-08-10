@@ -1,19 +1,24 @@
+mod consensus;
 mod core;
+mod metrics;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::core::{
-    BlobSource, DbBlobSource, FinishCondition, ReadingLoopConfig, Stats, run_reading_loop,
+    BlobSource, DbBlobSource, FinishCondition, RandomReadConfig, ReadingLoopConfig, ResultEvent,
+    Stats, consensus_read_once, da_read_once, run_random_read_loop, run_reading_loop,
     run_stats_collector, run_submission_loop,
 };
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
-use sov_celestia_adapter::verifier::CelestiaVerifier;
+use sov_celestia_adapter::verifier::{CelestiaVerifier, RollupParams};
 use sov_celestia_adapter::{
-    CelestiaConfig, CompressOnSubmit, DaService, DaVerifier, MonitoringConfig, init_metrics_tracker,
+    BlockHeaderTrait, CelestiaConfig, CelestiaService, CompressOnSubmit, DaService, DaVerifier,
+    MonitoringConfig, init_metrics_tracker,
 };
 use sov_rollup_interface::node::SecondaryShutdownController;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
 
 const STATS_INTERVAL: Duration = Duration::from_secs(120);
@@ -118,6 +123,9 @@ struct SubmitAndReadArgs {
     /// at startup.
     #[arg(long)]
     compression_chunk_size: Option<usize>,
+
+    #[command(flatten)]
+    random_reads: RandomReadArgs,
 }
 
 #[derive(ClapArgs, Debug)]
@@ -147,6 +155,55 @@ struct SyncAndReadArgs {
     /// If neither is given, runs until Ctrl+C / SIGTERM.
     #[arg(long)]
     run_for_seconds: Option<u64>,
+
+    #[command(flatten)]
+    random_reads: RandomReadArgs,
+}
+
+/// Opt-in random historical / archival read loops that run concurrently
+/// alongside the main workload (submit-and-read or sync-and-read). Both are off
+/// by default, so omitting these flags preserves the original behavior exactly.
+///
+/// The height range and cadence are shared: consensus `block_results` and DA
+/// `get_block_at` address the same Celestia block heights, so one range/rate
+/// applies to whichever loops are enabled.
+#[derive(ClapArgs, Debug)]
+struct RandomReadArgs {
+    /// Enable RPC archival reads: a loop doing random `block_results` reads
+    /// against the CometBFT consensus RPC given by --consensus-rpc-endpoint.
+    #[arg(long, requires = "consensus_rpc_endpoint")]
+    rpc_archival_reads: bool,
+
+    /// CometBFT consensus RPC endpoint (e.g. http://host:26657) for
+    /// --rpc-archival-reads.
+    #[arg(long)]
+    consensus_rpc_endpoint: Option<String>,
+
+    /// Auth token for the consensus RPC, spliced in as HTTP Basic auth.
+    #[arg(long)]
+    consensus_rpc_token: Option<String>,
+
+    /// Enable DA archival reads: a loop doing random `get_block_at` reads on the
+    /// DA (bridge) node, via the same adapter path (and --rpc-endpoint) as sync.
+    #[arg(long)]
+    da_archival_reads: bool,
+
+    /// Lower bound (inclusive) for random reads. Defaults to 1. Heights below a
+    /// node's pruning floor will fail — those count as failed archival reads.
+    #[arg(long)]
+    random_read_from_height: Option<u64>,
+
+    /// Upper bound (inclusive) for random reads. Defaults to the current chain head.
+    #[arg(long)]
+    random_read_to_height: Option<u64>,
+
+    /// Delay between successive reads, in milliseconds (applies to both loops).
+    #[arg(long, default_value_t = 500)]
+    random_read_interval_ms: u64,
+
+    /// Max concurrent in-flight reads (applies to both loops).
+    #[arg(long, default_value_t = 16)]
+    random_read_max_in_flight: usize,
 }
 
 fn validate_namespace(s: &str) -> Result<String, String> {
@@ -234,7 +291,8 @@ async fn main() {
                 .add_directive("tower=warn".parse().unwrap())
                 .add_directive("rustls=warn".parse().unwrap())
                 .add_directive("jsonrpsee=warn".parse().unwrap())
-                .add_directive("hyper=warn".parse().unwrap()),
+                .add_directive("hyper=warn".parse().unwrap())
+                .add_directive("tendermint_rpc=warn".parse().unwrap()),
         )
         .init();
 
@@ -255,7 +313,10 @@ async fn main() {
     shutdown_controller.shutdown();
 }
 
-async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_controller: &SecondaryShutdownController) {
+async fn run_submit_and_read(
+    args: SubmitAndReadArgs,
+    shutdown_controller: &SecondaryShutdownController,
+) {
     tracing::info!("Mode: submit-and-read");
     tracing::info!("Namespace: {}", args.namespace);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
@@ -326,6 +387,18 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_controller: &Seco
         }),
     };
 
+    // Optional archival/historical read loops run concurrently, bounded by the
+    // same wall-clock deadline as the submit/read workload.
+    let random_handles = spawn_random_read_loops(
+        &args.random_reads,
+        &celestia_service,
+        params,
+        Some(finish_time),
+        shutdown_controller,
+        &result_tx,
+    )
+    .await;
+
     let submission_handle = tokio::spawn(run_submission_loop(
         celestia_service.clone(),
         finish_time,
@@ -343,19 +416,28 @@ async fn run_submit_and_read(args: SubmitAndReadArgs, shutdown_controller: &Seco
             finish: FinishCondition::AfterInstant(finish_time),
         },
         shutdown_controller.clone(),
-        result_tx,
+        result_tx.clone(),
         verifier,
     ));
+
+    // Drop the original sender so the stats channel closes once every loop's
+    // cloned sender is dropped.
+    drop(result_tx);
+
     let stats_handle = tokio::spawn(run_stats_collector(result_rx, STATS_INTERVAL));
 
     submission_handle.await.unwrap();
     reading_handle.await.unwrap();
+    join_random_read_loops(random_handles, shutdown_controller).await;
     let stats = stats_handle.await.unwrap();
 
     print_submit_report(&stats, start.elapsed());
 }
 
-async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_controller: &SecondaryShutdownController) {
+async fn run_sync_and_read(
+    args: SyncAndReadArgs,
+    shutdown_controller: &SecondaryShutdownController,
+) {
     if let Some(until) = args.until_height
         && args.from_height > until
     {
@@ -387,7 +469,25 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_controller: &Secondar
     };
     tracing::info!(from_height = args.from_height, ?finish, "Sync parameters");
 
+    // A wall-clock deadline (from --run-for-seconds) also bounds the random-read
+    // loops; UntilHeight / Forever leave them running until the sync loop ends
+    // (which then triggers shutdown) or Ctrl+C.
+    let deadline = match finish {
+        FinishCondition::AfterInstant(d) => Some(d),
+        _ => None,
+    };
+
     let (result_tx, result_rx) = mpsc::unbounded_channel();
+
+    let random_handles = spawn_random_read_loops(
+        &args.random_reads,
+        &celestia_service,
+        params,
+        deadline,
+        shutdown_controller,
+        &result_tx,
+    )
+    .await;
 
     let verifier = CelestiaVerifier::new(params);
     let reading_handle = tokio::spawn(run_reading_loop(
@@ -397,15 +497,216 @@ async fn run_sync_and_read(args: SyncAndReadArgs, shutdown_controller: &Secondar
             finish,
         },
         shutdown_controller.clone(),
-        result_tx,
+        result_tx.clone(),
         verifier,
     ));
+
+    // Drop the original sender so the stats channel closes once every loop's
+    // cloned sender is dropped.
+    drop(result_tx);
+
     let stats_handle = tokio::spawn(run_stats_collector(result_rx, STATS_INTERVAL));
 
     reading_handle.await.unwrap();
+    join_random_read_loops(random_handles, shutdown_controller).await;
     let stats = stats_handle.await.unwrap();
 
     print_sync_report(&stats, start.elapsed());
+}
+
+/// Spawn whichever random-read loops the flags enable (consensus `block_results`
+/// and/or DA archival `get_block_at`), returning their join handles. Both are
+/// opt-in, so an empty vec means the workload runs exactly as before.
+async fn spawn_random_read_loops(
+    args: &RandomReadArgs,
+    celestia_service: &Arc<CelestiaService>,
+    params: RollupParams,
+    deadline: Option<Instant>,
+    shutdown_controller: &SecondaryShutdownController,
+    result_tx: &mpsc::UnboundedSender<ResultEvent>,
+) -> Vec<JoinHandle<()>> {
+    let mut handles = Vec::new();
+
+    let interval = Duration::from_millis(args.random_read_interval_ms);
+    let max_in_flight = args.random_read_max_in_flight;
+
+    if args.rpc_archival_reads {
+        let endpoint = args
+            .consensus_rpc_endpoint
+            .as_deref()
+            .expect("clap `requires` guarantees --consensus-rpc-endpoint is set");
+        handles.push(
+            spawn_consensus_read_loop(
+                endpoint,
+                args.consensus_rpc_token.as_deref(),
+                args.random_read_from_height,
+                args.random_read_to_height,
+                interval,
+                max_in_flight,
+                deadline,
+                shutdown_controller.clone(),
+                result_tx.clone(),
+            )
+            .await,
+        );
+    }
+
+    if args.da_archival_reads {
+        handles.push(
+            spawn_da_archival_read_loop(
+                celestia_service.clone(),
+                params,
+                args.random_read_from_height,
+                args.random_read_to_height,
+                interval,
+                max_in_flight,
+                deadline,
+                shutdown_controller.clone(),
+                result_tx.clone(),
+            )
+            .await,
+        );
+    }
+
+    handles
+}
+
+/// Await the random-read loops after the main workload has finished. If any are
+/// running, trigger shutdown first so they stop promptly (relevant for the
+/// UntilHeight / Forever sync modes, which have no wall-clock deadline).
+async fn join_random_read_loops(
+    handles: Vec<JoinHandle<()>>,
+    shutdown_controller: &SecondaryShutdownController,
+) {
+    if handles.is_empty() {
+        return;
+    }
+    shutdown_controller.shutdown();
+    for handle in handles {
+        handle.await.unwrap();
+    }
+}
+
+/// Resolve the DA archival height range (defaulting `to` to the current chain
+/// head) and spawn the archival read loop. Exits on a fatal head-query error.
+#[allow(clippy::too_many_arguments)]
+async fn spawn_da_archival_read_loop(
+    celestia_service: Arc<CelestiaService>,
+    params: RollupParams,
+    from_override: Option<u64>,
+    to_override: Option<u64>,
+    interval: Duration,
+    max_in_flight: usize,
+    deadline: Option<Instant>,
+    shutdown_controller: SecondaryShutdownController,
+    result_tx: mpsc::UnboundedSender<ResultEvent>,
+) -> JoinHandle<()> {
+    let to_height = match to_override {
+        Some(h) => h,
+        None => match celestia_service.get_head_block_header().await {
+            Ok(header) => header.height(),
+            Err(e) => {
+                eprintln!("Failed to query DA head for archival reads: {e:#}");
+                std::process::exit(2);
+            }
+        },
+    };
+    let from_height = from_override.unwrap_or(1).max(1);
+    tracing::info!(from_height, to_height, "DA archival random reads enabled");
+
+    let verifier = Arc::new(CelestiaVerifier::new(params));
+    let config = RandomReadConfig {
+        from_height,
+        to_height,
+        interval,
+        max_in_flight,
+        deadline,
+    };
+    tokio::spawn(run_random_read_loop(
+        "da-archival",
+        config,
+        shutdown_controller,
+        result_tx,
+        move |height| {
+            let celestia_service = celestia_service.clone();
+            let verifier = verifier.clone();
+            async move { da_read_once(&celestia_service, &verifier, height).await }
+        },
+    ))
+}
+
+/// Build the consensus RPC client, resolve the height window, and spawn the
+/// random historical `block_results` read loop. Exits the process on a fatal
+/// setup error (bad token / URL / unreachable node), matching the other startup
+/// error paths.
+#[allow(clippy::too_many_arguments)]
+async fn spawn_consensus_read_loop(
+    endpoint: &str,
+    token: Option<&str>,
+    from_override: Option<u64>,
+    to_override: Option<u64>,
+    interval: Duration,
+    max_in_flight: usize,
+    deadline: Option<Instant>,
+    shutdown_controller: SecondaryShutdownController,
+    result_tx: mpsc::UnboundedSender<ResultEvent>,
+) -> JoinHandle<()> {
+    let token = match consensus::parse_token(token) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e:#}");
+            std::process::exit(2);
+        }
+    };
+    let http = match consensus::build_client(endpoint, token.as_ref()) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            eprintln!("Failed to build consensus RPC client: {e:#}");
+            std::process::exit(2);
+        }
+    };
+    let window = match consensus::fetch_height_window(&http).await {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!(
+                "Failed to query consensus node {}: {e:#}",
+                consensus::redact_userinfo(endpoint)
+            );
+            std::process::exit(2);
+        }
+    };
+
+    // Lower bound defaults to 1 (full history); reads below the node's pruning
+    // floor are left to fail as legitimate archival-read failures. The upper
+    // bound is clamped to the tip so we never request a not-yet-produced height.
+    let from_height = from_override.unwrap_or(1).max(1);
+    let to_height = to_override.unwrap_or(window.latest).min(window.latest);
+    tracing::info!(
+        endpoint = %consensus::redact_userinfo(endpoint),
+        node_earliest = window.earliest,
+        node_latest = window.latest,
+        from_height,
+        to_height,
+        "Consensus random historical reads enabled"
+    );
+
+    let config = RandomReadConfig {
+        from_height,
+        to_height,
+        interval,
+        max_in_flight,
+        deadline,
+    };
+    tokio::spawn(run_random_read_loop(
+        "consensus",
+        config,
+        shutdown_controller,
+        result_tx,
+        move |height| {
+            let http = http.clone();
+            async move { consensus_read_once(&http, height).await }
+        },
+    ))
 }
 
 fn print_read_stats(stats: &Stats) {
@@ -438,12 +739,43 @@ fn print_submit_report(stats: &Stats, elapsed: Duration) {
     let throughput_kib_s = stats.successful_bytes as f64 / elapsed.as_secs_f64() / 1024.0;
     tracing::info!("Throughput: {throughput_kib_s:.2} KiB/s");
     print_read_stats(stats);
+    print_consensus_read_stats(stats);
+    print_da_archival_read_stats(stats);
 }
 
 fn print_sync_report(stats: &Stats, elapsed: Duration) {
     tracing::info!("=== Final Stats (sync-and-read) ===");
     tracing::info!("Running time: {:.2?}", elapsed);
     print_read_stats(stats);
+    print_consensus_read_stats(stats);
+    print_da_archival_read_stats(stats);
+}
+
+fn print_consensus_read_stats(stats: &Stats) {
+    let total = stats.consensus_reads_success + stats.consensus_reads_error;
+    if total == 0 {
+        return;
+    }
+    let success_percent = (stats.consensus_reads_success as f64 / total as f64) * 100.0;
+    tracing::info!(
+        "Consensus block_results reads: {} success ({success_percent:.2}%), {} errors",
+        stats.consensus_reads_success,
+        stats.consensus_reads_error
+    );
+}
+
+fn print_da_archival_read_stats(stats: &Stats) {
+    let total = stats.da_archival_reads_success + stats.da_archival_reads_error;
+    if total == 0 {
+        return;
+    }
+    let success_percent = (stats.da_archival_reads_success as f64 / total as f64) * 100.0;
+    tracing::info!(
+        "DA archival reads: {} success ({success_percent:.2}%), {} errors",
+        stats.da_archival_reads_success,
+        stats.da_archival_reads_error
+    );
+    tracing::info!("DA archival blobs read: {}", stats.da_archival_blobs_read);
 }
 
 #[cfg(test)]
@@ -617,11 +949,7 @@ mod tests {
     #[test]
     fn compression_chunk_size_defaults_to_none() {
         // Omitting the flag leaves the config default untouched.
-        assert!(
-            submit_and_read_args(&[])
-                .compression_chunk_size
-                .is_none()
-        );
+        assert!(submit_and_read_args(&[]).compression_chunk_size.is_none());
     }
 
     #[test]
