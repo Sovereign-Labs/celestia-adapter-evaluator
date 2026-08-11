@@ -20,6 +20,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so build.rs's `git describe --exact-match` can
+          # resolve a tag on HEAD inside the Docker build (a shallow checkout has
+          # neither). `.git` is part of the build context and derives the version.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Compute lowercase image name
         id: img
@@ -66,16 +72,38 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe --exact-match` can resolve a tag
+          # on HEAD (a shallow checkout has neither).
+          fetch-depth: 0
+          fetch-tags: true
 
-      - name: Compute repo commit tag
-        id: commit
+      - name: Compute image tags
+        id: tags
         run: |
           full="${{ github.sha }}"
           if [ -z "$full" ]; then
             echo "::error::Failed to resolve repository commit SHA"
             exit 1
           fi
-          echo "short=${full:0:12}" >> "$GITHUB_OUTPUT"
+          short="${full:0:12}"
+          echo "short=$short" >> "$GITHUB_OUTPUT"
+
+          # Always tag with the short SHA for traceability. When HEAD is exactly
+          # tagged, also tag with the git tag (both point at the same manifest).
+          tags="$short"
+          if git_tag="$(git describe --exact-match --tags HEAD 2>/dev/null)"; then
+            tags="$git_tag"$'\n'"$short"
+            echo "Tagging with git tag '$git_tag' and short SHA '$short'"
+          else
+            echo "No tag on HEAD; tagging with short SHA '$short' only"
+          fi
+          # Multi-line output for the manifest-create step to consume.
+          {
+            echo "list<<EOF"
+            echo "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Compute lowercase image name
         id: img
@@ -103,11 +131,19 @@ jobs:
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
         run: |
+          # One -t per resolved tag (git tag and/or short SHA), all pointing at
+          # the same multi-arch manifest assembled from the per-arch digests.
+          tag_args=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            tag_args+=(-t "${{ steps.img.outputs.name }}:$tag")
+          done <<< "${{ steps.tags.outputs.list }}"
+
           docker buildx imagetools create \
-            -t "${{ steps.img.outputs.name }}:${{ steps.commit.outputs.short }}" \
+            "${tag_args[@]}" \
             $(printf "${{ steps.img.outputs.name }}@sha256:%s " *)
 
       - name: Inspect
         run: |
           docker buildx imagetools inspect \
-            "${{ steps.img.outputs.name }}:${{ steps.commit.outputs.short }}"
+            "${{ steps.img.outputs.name }}:${{ steps.tags.outputs.short }}"

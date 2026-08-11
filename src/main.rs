@@ -23,8 +23,13 @@ use tracing_subscriber::EnvFilter;
 
 const STATS_INTERVAL: Duration = Duration::from_secs(120);
 
+/// How often to re-emit [`BuildInfoMeasurement`]. Must stay well under Telegraf's
+/// `expiration_interval` (90s), or the single build-info series is expired from
+/// the scrape endpoint between emits and flickers in Prometheus.
+const BUILD_INFO_EMIT_INTERVAL: Duration = Duration::from_secs(30);
+
 #[derive(Parser, Debug)]
-#[command(name = "celestia-adapter-evaluator", version)]
+#[command(name = "celestia-adapter-evaluator", version = metrics::BUILD_VERSION)]
 #[command(about = "Celestia Adapter Evaluator", long_about = None)]
 struct Cli {
     #[command(subcommand)]
@@ -281,6 +286,26 @@ fn spawn_signal_listener(shutdown_controller: SecondaryShutdownController) {
     });
 }
 
+/// Emit [`BuildInfoMeasurement`] immediately, then re-emit every
+/// [`BUILD_INFO_EMIT_INTERVAL`] until shutdown. Nothing else emits this series,
+/// so without the periodic refresh Telegraf would expire it and the running
+/// version would vanish from Prometheus.
+fn spawn_build_info_emitter(shutdown_controller: SecondaryShutdownController) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(BUILD_INFO_EMIT_INTERVAL);
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {
+                    metrics::emit(metrics::BuildInfoMeasurement {
+                        version: metrics::BUILD_VERSION,
+                    });
+                }
+                _ = shutdown_controller.wait_for_shutdown() => break,
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -304,6 +329,11 @@ async fn main() {
 
     let monitoring_config = MonitoringConfig::standard();
     let _ = init_metrics_tracker(&monitoring_config, &shutdown_controller);
+
+    // Advertise the running build version as a metric, refreshed on an interval
+    // so Telegraf never expires the series (see BUILD_INFO_EMIT_INTERVAL).
+    tracing::info!(version = metrics::BUILD_VERSION, "Build version");
+    spawn_build_info_emitter(shutdown_controller.clone());
 
     match cli.command {
         Commands::SubmitAndRead(args) => run_submit_and_read(args, &shutdown_controller).await,

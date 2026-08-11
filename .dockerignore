@@ -1,5 +1,6 @@
 target/
-.git/
+# .git is intentionally NOT excluded: build.rs runs `git describe` to embed the
+# build version, so the builder needs the repository metadata.
 .gitignore
 .idea/
 *.log

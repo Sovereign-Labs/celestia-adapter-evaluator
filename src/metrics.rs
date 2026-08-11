@@ -8,6 +8,47 @@ use std::io::Write;
 
 use sov_metrics::{Metric, track_metrics};
 
+/// Version this binary was built at: the git tag when HEAD was tagged, otherwise
+/// the short commit SHA (or `"unknown"` for a build with neither). Resolved by
+/// `build.rs` at compile time and carried as the `version` tag on
+/// [`BuildInfoMeasurement`].
+pub const BUILD_VERSION: &str = env!("EVALUATOR_BUILD_VERSION");
+
+/// The running binary's build version, following the Prometheus `*_build_info`
+/// convention: the useful information rides as a *tag* (`version`) and the field
+/// is a constant `1`, so `evaluator_build_info{version="..."}` is a queryable
+/// label with an always-1 value.
+///
+/// Line protocol:
+/// `evaluator_build,version=<v> info=1i`
+///
+/// The measurement is `evaluator_build` with an `info` field (not measurement
+/// `evaluator_build_info` with a `value` field): Telegraf's `metric_version = 2`
+/// renders `measurement,tag field=val` as the Prometheus series
+/// `measurement_field{tag=...}`, so this split yields exactly the conventional
+/// `evaluator_build_info{version=...}` — whereas a `value` field would suffix it
+/// to the non-standard `evaluator_build_info_value`.
+///
+/// Unlike the read measurements, nothing else emits this, so it must be re-sent
+/// on an interval shorter than Telegraf's `expiration_interval` (90s locally) or
+/// the series is expired from the scrape endpoint and disappears from Prometheus.
+#[derive(Debug)]
+pub struct BuildInfoMeasurement {
+    pub version: &'static str,
+}
+
+impl Metric for BuildInfoMeasurement {
+    fn measurement_name(&self) -> &'static str {
+        "evaluator_build"
+    }
+
+    fn serialize_for_telegraf(&self, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+        let name = self.measurement_name();
+        let version = self.version;
+        write!(buffer, "{name},version={version} info=1i")
+    }
+}
+
 /// One historical `block_results` read on the consensus RPC.
 ///
 /// Line protocol:
@@ -157,6 +198,7 @@ mod tests {
             response_time_us: 6123,
             blob_count: 3,
         });
+        emit(BuildInfoMeasurement { version: "v1.2.3" });
 
         // The publisher batches into ~508-byte datagrams and only flushes on fill
         // or shutdown; two small metrics won't fill it, so trigger the shutdown
@@ -172,7 +214,7 @@ mod tests {
             for line in std::str::from_utf8(&buf[..n]).unwrap().lines() {
                 lines.push(line.to_string());
             }
-            if lines.len() >= 3 {
+            if lines.len() >= 4 {
                 break;
             }
         }
@@ -189,6 +231,10 @@ mod tests {
             .iter()
             .find(|l| l.starts_with("evaluator_recent_read"))
             .expect("recent read measurement never arrived at the socket");
+        let build_info = lines
+            .iter()
+            .find(|l| l.starts_with("evaluator_build,"))
+            .expect("build info measurement never arrived at the socket");
 
         // Telegraf appends a timestamp; assert the measurement/tag/field prefix.
         assert!(
@@ -211,6 +257,10 @@ mod tests {
                  response_time_us=6123,height=451234,blob_count=3"
             ),
             "unexpected recent line: {recent}"
+        );
+        assert!(
+            build_info.starts_with("evaluator_build,version=v1.2.3 info=1i"),
+            "unexpected build info line: {build_info}"
         );
     }
 }
