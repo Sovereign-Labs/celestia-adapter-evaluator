@@ -74,6 +74,44 @@ impl Metric for DaArchivalReadMeasurement {
     }
 }
 
+/// One recent-tip `get_block_at` read via the sequential reading loop.
+///
+/// Line protocol:
+/// `evaluator_recent_read,is_success=<0|1> response_time_us=..,height=..,blob_count=..`
+///
+/// The recent reader shares the SDK's `sov_celestia_adapter_get_block_*` metrics
+/// with the DA archival loop (both go through `get_block_at`), so those cannot
+/// tell recent tip reads apart from random historical ones. This dedicated
+/// measurement isolates the sequential reader: `height` is monotonic per
+/// success, and — unlike the SDK metric, which is emitted on success only — it
+/// also records *failed* reads via `is_success`, so freshness/latency alerts and
+/// dashboards can key off the recent path alone.
+#[derive(Debug)]
+pub struct RecentReadMeasurement {
+    pub is_success: bool,
+    pub height: u64,
+    pub response_time_us: u128,
+    pub blob_count: u64,
+}
+
+impl Metric for RecentReadMeasurement {
+    fn measurement_name(&self) -> &'static str {
+        "evaluator_recent_read"
+    }
+
+    fn serialize_for_telegraf(&self, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+        let name = self.measurement_name();
+        let is_success = u8::from(self.is_success);
+        let height = self.height;
+        let response_time_us = self.response_time_us;
+        let blob_count = self.blob_count;
+        write!(
+            buffer,
+            "{name},is_success={is_success} response_time_us={response_time_us},height={height},blob_count={blob_count}",
+        )
+    }
+}
+
 /// Submit a measurement to the global tracker. A no-op if the tracker was never
 /// initialized (metrics are lossy by design).
 pub fn emit<M: Metric + 'static>(measurement: M) {
@@ -113,6 +151,12 @@ mod tests {
             response_time_us: 204100,
             blob_count: 0,
         });
+        emit(RecentReadMeasurement {
+            is_success: true,
+            height: 451234,
+            response_time_us: 6123,
+            blob_count: 3,
+        });
 
         // The publisher batches into ~508-byte datagrams and only flushes on fill
         // or shutdown; two small metrics won't fill it, so trigger the shutdown
@@ -128,7 +172,7 @@ mod tests {
             for line in std::str::from_utf8(&buf[..n]).unwrap().lines() {
                 lines.push(line.to_string());
             }
-            if lines.len() >= 2 {
+            if lines.len() >= 3 {
                 break;
             }
         }
@@ -141,6 +185,10 @@ mod tests {
             .iter()
             .find(|l| l.starts_with("evaluator_da_archival_read"))
             .expect("DA archival measurement never arrived at the socket");
+        let recent = lines
+            .iter()
+            .find(|l| l.starts_with("evaluator_recent_read"))
+            .expect("recent read measurement never arrived at the socket");
 
         // Telegraf appends a timestamp; assert the measurement/tag/field prefix.
         assert!(
@@ -156,6 +204,13 @@ mod tests {
                  response_time_us=204100,height=88771,blob_count=0"
             ),
             "unexpected archival line: {archival}"
+        );
+        assert!(
+            recent.starts_with(
+                "evaluator_recent_read,is_success=1 \
+                 response_time_us=6123,height=451234,blob_count=3"
+            ),
+            "unexpected recent line: {recent}"
         );
     }
 }

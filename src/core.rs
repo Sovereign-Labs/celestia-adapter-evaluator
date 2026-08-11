@@ -14,7 +14,9 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 
 use crate::consensus;
-use crate::metrics::{self, ConsensusReadMeasurement, DaArchivalReadMeasurement};
+use crate::metrics::{
+    self, ConsensusReadMeasurement, DaArchivalReadMeasurement, RecentReadMeasurement,
+};
 
 pub enum ResultEvent {
     Submit(anyhow::Result<usize>),
@@ -363,7 +365,7 @@ pub async fn run_reading_loop(
         }
 
         let result = tokio::select! {
-            res = read_block(&celestia_service, height, &verifier) => res,
+            res = recent_read_once(&celestia_service, &verifier, height) => res,
             _ = shutdown_controller.wait_for_shutdown() => break,
         };
 
@@ -399,6 +401,39 @@ async fn read_block(
     verifier.verify_relevant_tx_list(block.header(), &relevant_blobs, relevant_proofs)?;
 
     Ok(relevant_blobs.batch_blobs.len())
+}
+
+/// One recent-tip read via the sequential [`run_reading_loop`]: time the same
+/// [`read_block`] path the archival loop uses, emit a dedicated
+/// [`RecentReadMeasurement`], and return the raw result so the loop can decide
+/// whether to advance its height cursor.
+///
+/// Mirrors [`da_read_once`], but returns the `Result` rather than a pre-wrapped
+/// [`ResultEvent`]: the loop needs the outcome to advance the cursor, and it
+/// already builds the `ResultEvent::Read` itself. Because the SDK's
+/// `sov_celestia_adapter_get_block_*` metrics conflate this path with the DA
+/// archival loop, this measurement is what lets the recent path be observed and
+/// alerted on in isolation.
+async fn recent_read_once(
+    celestia_service: &CelestiaService,
+    verifier: &CelestiaVerifier,
+    height: u64,
+) -> anyhow::Result<usize> {
+    let start = Instant::now();
+    let result = read_block(celestia_service, height, verifier).await;
+    let response_time_us = start.elapsed().as_micros();
+
+    let (is_success, blob_count) = match &result {
+        Ok(blobs) => (true, *blobs as u64),
+        Err(_) => (false, 0),
+    };
+    metrics::emit(RecentReadMeasurement {
+        is_success,
+        height,
+        response_time_us,
+        blob_count,
+    });
+    result
 }
 
 /// Shared configuration for the random historical / archival read loops.
