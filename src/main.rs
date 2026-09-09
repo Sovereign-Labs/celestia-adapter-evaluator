@@ -334,6 +334,7 @@ async fn main() {
     // so Telegraf never expires the series (see BUILD_INFO_EMIT_INTERVAL).
     tracing::info!(version = metrics::BUILD_VERSION, "Build version");
     spawn_build_info_emitter(shutdown_controller.clone());
+    metrics::initialize_slo_metrics(shutdown_controller.clone());
 
     match cli.command {
         Commands::SubmitAndRead(args) => run_submit_and_read(args, &shutdown_controller).await,

@@ -5,14 +5,275 @@
 //! adapter's own `sov_celestia_adapter_*` measurements — no separate pipeline.
 
 use std::io::Write;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use sov_metrics::{Metric, track_metrics};
+use sov_rollup_interface::node::SecondaryShutdownController;
 
 /// Version this binary was built at: the git tag when HEAD was tagged, otherwise
 /// the short commit SHA (or `"unknown"` for a build with neither). Resolved by
 /// `build.rs` at compile time and carried as the `version` tag on
 /// [`BuildInfoMeasurement`].
 pub const BUILD_VERSION: &str = env!("EVALUATOR_BUILD_VERSION");
+
+const SLO_METRICS_EMIT_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Copy, Debug)]
+struct HistogramBucket {
+    upper_bound_seconds: f64,
+    label: &'static str,
+}
+
+const HISTOGRAM_BUCKETS: [HistogramBucket; 11] = [
+    HistogramBucket {
+        upper_bound_seconds: 0.25,
+        label: "0.25",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 0.5,
+        label: "0.5",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 1.0,
+        label: "1",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 2.0,
+        label: "2",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 4.0,
+        label: "4",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 8.0,
+        label: "8",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 12.0,
+        label: "12",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 16.0,
+        label: "16",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 30.0,
+        label: "30",
+    },
+    HistogramBucket {
+        upper_bound_seconds: 60.0,
+        label: "60",
+    },
+    HistogramBucket {
+        upper_bound_seconds: f64::INFINITY,
+        label: "+Inf",
+    },
+];
+
+/// Operations covered by the evaluator's public SLO metric contract.
+#[derive(Clone, Copy, Debug)]
+pub enum SloOperation {
+    PayForBlob,
+    RecentBlockRead,
+}
+
+impl SloOperation {
+    fn index(self) -> usize {
+        match self {
+            Self::PayForBlob => 0,
+            Self::RecentBlockRead => 1,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PayForBlob => "pay_for_blob",
+            Self::RecentBlockRead => "recent_block_read",
+        }
+    }
+}
+
+const SLO_OPERATIONS: [SloOperation; 2] = [SloOperation::PayForBlob, SloOperation::RecentBlockRead];
+
+#[derive(Clone, Debug, Default)]
+struct OperationState {
+    successes: u64,
+    failures: u64,
+    duration_buckets: [u64; HISTOGRAM_BUCKETS.len()],
+    duration_sum_seconds: f64,
+    duration_count: u64,
+}
+
+impl OperationState {
+    fn record(&mut self, success: bool, duration: Duration) {
+        if success {
+            self.successes += 1;
+        } else {
+            self.failures += 1;
+        }
+
+        let duration_seconds = duration.as_secs_f64();
+        self.duration_sum_seconds += duration_seconds;
+        self.duration_count += 1;
+        for (bucket, count) in HISTOGRAM_BUCKETS
+            .iter()
+            .zip(self.duration_buckets.iter_mut())
+        {
+            if duration_seconds <= bucket.upper_bound_seconds {
+                *count += 1;
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct SloMetrics {
+    operations: Mutex<[OperationState; SLO_OPERATIONS.len()]>,
+}
+
+impl SloMetrics {
+    fn record(&self, operation: SloOperation, success: bool, duration: Duration) {
+        let mut operations = self.operations.lock().unwrap();
+        operations[operation.index()].record(success, duration);
+        emit_slo_snapshot(&operations);
+    }
+
+    fn emit(&self) {
+        let operations = self.operations.lock().unwrap();
+        emit_slo_snapshot(&operations);
+    }
+}
+
+static SLO_METRICS: OnceLock<SloMetrics> = OnceLock::new();
+
+/// Initialize all SLO series at zero and refresh them often enough to remain
+/// present when Telegraf expires inactive input series.
+pub fn initialize_slo_metrics(shutdown_controller: SecondaryShutdownController) {
+    let metrics = SLO_METRICS.get_or_init(SloMetrics::default);
+    metrics.emit();
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(SLO_METRICS_EMIT_INTERVAL);
+        ticker.tick().await;
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => metrics.emit(),
+                _ = shutdown_controller.wait_for_shutdown() => break,
+            }
+        }
+    });
+}
+
+/// Record one completed SLO operation. Work cancelled before completion never
+/// calls this function and therefore does not affect either metric family.
+pub fn record_slo_operation(operation: SloOperation, success: bool, duration: Duration) {
+    SLO_METRICS
+        .get_or_init(SloMetrics::default)
+        .record(operation, success, duration);
+}
+
+#[derive(Debug)]
+struct OperationCounterMeasurement {
+    operation: &'static str,
+    outcome: &'static str,
+    total: u64,
+}
+
+impl Metric for OperationCounterMeasurement {
+    fn measurement_name(&self) -> &'static str {
+        "celestia_adapter_evaluator_operations"
+    }
+
+    fn serialize_for_telegraf(&self, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+        write!(
+            buffer,
+            "{},operation={},outcome={} total={}i",
+            self.measurement_name(),
+            self.operation,
+            self.outcome,
+            self.total,
+        )
+    }
+}
+
+#[derive(Debug)]
+struct OperationDurationBucketMeasurement {
+    operation: &'static str,
+    le: &'static str,
+    bucket: u64,
+}
+
+impl Metric for OperationDurationBucketMeasurement {
+    fn measurement_name(&self) -> &'static str {
+        "celestia_adapter_evaluator_operation_duration_seconds"
+    }
+
+    fn serialize_for_telegraf(&self, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+        write!(
+            buffer,
+            "{},operation={},le={} bucket={}i",
+            self.measurement_name(),
+            self.operation,
+            self.le,
+            self.bucket,
+        )
+    }
+}
+
+#[derive(Debug)]
+struct OperationDurationSummaryMeasurement {
+    operation: &'static str,
+    sum: f64,
+    count: u64,
+}
+
+impl Metric for OperationDurationSummaryMeasurement {
+    fn measurement_name(&self) -> &'static str {
+        "celestia_adapter_evaluator_operation_duration_seconds"
+    }
+
+    fn serialize_for_telegraf(&self, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+        write!(
+            buffer,
+            "{},operation={} sum={},count={}i",
+            self.measurement_name(),
+            self.operation,
+            self.sum,
+            self.count,
+        )
+    }
+}
+
+fn emit_slo_snapshot(operations: &[OperationState; SLO_OPERATIONS.len()]) {
+    for operation in SLO_OPERATIONS {
+        let state = &operations[operation.index()];
+        let operation = operation.label();
+        emit(OperationCounterMeasurement {
+            operation,
+            outcome: "success",
+            total: state.successes,
+        });
+        emit(OperationCounterMeasurement {
+            operation,
+            outcome: "failure",
+            total: state.failures,
+        });
+        for (bucket, count) in HISTOGRAM_BUCKETS.iter().zip(state.duration_buckets) {
+            emit(OperationDurationBucketMeasurement {
+                operation,
+                le: bucket.label,
+                bucket: count,
+            });
+        }
+        emit(OperationDurationSummaryMeasurement {
+            operation,
+            sum: state.duration_sum_seconds,
+            count: state.duration_count,
+        });
+    }
+}
 
 /// The running binary's build version, following the Prometheus `*_build_info`
 /// convention: the useful information rides as a *tag* (`version`) and the field
@@ -166,6 +427,57 @@ mod tests {
     use sov_rollup_interface::node::SecondaryShutdownController;
     use std::time::Duration;
     use tokio::net::UdpSocket;
+
+    fn serialize(measurement: &impl Metric) -> String {
+        let mut buffer = Vec::new();
+        measurement.serialize_for_telegraf(&mut buffer).unwrap();
+        String::from_utf8(buffer).unwrap()
+    }
+
+    #[test]
+    fn slo_accumulator_counts_outcomes_and_cumulative_buckets() {
+        let mut state = OperationState::default();
+        state.record(true, Duration::from_millis(400));
+        state.record(false, Duration::from_secs(13));
+
+        assert_eq!(state.successes, 1);
+        assert_eq!(state.failures, 1);
+        assert_eq!(state.duration_count, 2);
+        assert!((state.duration_sum_seconds - 13.4).abs() < f64::EPSILON);
+        assert_eq!(state.duration_buckets[0], 0);
+        assert_eq!(state.duration_buckets[1], 1);
+        assert_eq!(state.duration_buckets[6], 1);
+        assert_eq!(state.duration_buckets[7], 2);
+        assert_eq!(state.duration_buckets[10], state.duration_count);
+    }
+
+    #[test]
+    fn slo_measurements_have_the_prometheus_contract_shape() {
+        assert_eq!(
+            serialize(&OperationCounterMeasurement {
+                operation: "pay_for_blob",
+                outcome: "failure",
+                total: 3,
+            }),
+            "celestia_adapter_evaluator_operations,operation=pay_for_blob,outcome=failure total=3i"
+        );
+        assert_eq!(
+            serialize(&OperationDurationBucketMeasurement {
+                operation: "recent_block_read",
+                le: "12",
+                bucket: 7,
+            }),
+            "celestia_adapter_evaluator_operation_duration_seconds,operation=recent_block_read,le=12 bucket=7i"
+        );
+        assert_eq!(
+            serialize(&OperationDurationSummaryMeasurement {
+                operation: "recent_block_read",
+                sum: 8.5,
+                count: 2,
+            }),
+            "celestia_adapter_evaluator_operation_duration_seconds,operation=recent_block_read sum=8.5,count=2i"
+        );
+    }
 
     /// End-to-end proof that a custom measurement reaches the Telegraf socket
     /// through the same global tracker the adapter installs, with exactly the
