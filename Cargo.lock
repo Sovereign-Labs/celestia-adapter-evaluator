@@ -429,7 +429,6 @@ dependencies = [
  "rusqlite",
  "sov-celestia-adapter",
  "sov-metrics",
- "sov-rollup-interface",
  "sov-shutdown",
  "tendermint",
  "tendermint-rpc",
@@ -3791,7 +3790,7 @@ dependencies = [
 [[package]]
 name = "sov-celestia-adapter"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3825,7 +3824,7 @@ dependencies = [
 [[package]]
 name = "sov-metrics"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3845,7 +3844,7 @@ dependencies = [
 [[package]]
 name = "sov-modules-macros"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "anyhow",
  "bech32",
@@ -3867,7 +3866,7 @@ dependencies = [
 [[package]]
 name = "sov-rollup-interface"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3893,7 +3892,7 @@ dependencies = [
 [[package]]
 name = "sov-shutdown"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "tokio",
  "tracing",
@@ -3903,7 +3902,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "bech32",
  "borsh",
@@ -3919,7 +3918,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macro-helpers"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "bech32",
  "borsh",
@@ -3934,7 +3933,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macros"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=ac48a43268d92039c22a96ec7c0786c208cf5eae#ac48a43268d92039c22a96ec7c0786c208cf5eae"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
 dependencies = [
  "sov-universal-wallet-macro-helpers",
  "syn 2.0.118",
