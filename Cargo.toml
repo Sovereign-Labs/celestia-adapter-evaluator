@@ -25,9 +25,9 @@ tendermint = "0.40"
 tendermint-rpc = { version = "0.40", features = ["http-client"] }
 
 # dev branch on 2026-06-25
-sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "b4f7b9be72e1dcb28e0b8334afed639b97de3ab5", features = ["native"] }
-sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "b4f7b9be72e1dcb28e0b8334afed639b97de3ab5", features = ["native"] }
+sov-celestia-adapter = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "ac48a43268d92039c22a96ec7c0786c208cf5eae", features = ["native"] }
+sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "ac48a43268d92039c22a96ec7c0786c208cf5eae", features = ["native"] }
 # Direct handle on the metrics pipeline so we can emit our own measurements
 # (block_results reads) through the same Telegraf tracker the adapter initializes.
-sov-metrics = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "b4f7b9be72e1dcb28e0b8334afed639b97de3ab5", features = ["native"] }
-sov-shutdown = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "b4f7b9be72e1dcb28e0b8334afed639b97de3ab5" }
+sov-metrics = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "ac48a43268d92039c22a96ec7c0786c208cf5eae", features = ["native"] }
+sov-shutdown = { git = "https://github.com/Sovereign-Labs/sovereign-sdk.git", rev = "ac48a43268d92039c22a96ec7c0786c208cf5eae" }
