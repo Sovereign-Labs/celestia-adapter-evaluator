@@ -182,6 +182,41 @@ It is possible to use https://github.com/Sovereign-Labs/sov-observability to col
 Clone https://github.com/Sovereign-Labs/sov-observability and run it with `make start`.
 Data from the tool will be visible in the "Sovereign Celestia Adapter" dashboard.
 
+The evaluator can also expose its own Prometheus endpoint directly. Pass `--prometheus-exporter-bind <IP:PORT>` before or after the subcommand, then scrape `/metrics` on that address. The endpoint is disabled when the flag is omitted.
+
+```bash
+cargo run --release -- sync-and-read \
+  --namespace "myrollup00" \
+  --rpc-endpoint "http://localhost:26657" \
+  --from-height 1234567 \
+  --prometheus-exporter-bind 0.0.0.0:9845
+```
+
+The direct endpoint exports these counters:
+
+| Metric | Meaning |
+|--------|---------|
+| `evaluator_blob_write_attempts_total` | Completed blob write attempts |
+| `evaluator_blob_write_failures_total` | Failed blob write attempts |
+| `evaluator_blob_write_bytes_total` | Payload bytes written successfully |
+| `evaluator_block_read_attempts_total` | Completed sequential block read attempts |
+| `evaluator_block_read_failures_total` | Failed sequential block read attempts |
+| `evaluator_blobs_read_total` | Batch blobs read and verified successfully |
+| `evaluator_blob_read_bytes_total` | Batch blob payload bytes read and verified successfully |
+
+Throughput and ratios are calculated in PromQL over the desired window. For example:
+
+```promql
+rate(evaluator_blob_write_bytes_total[5m])
+rate(evaluator_blob_read_bytes_total[5m])
+rate(evaluator_blob_write_attempts_total[5m]) - rate(evaluator_blob_write_failures_total[5m])
+rate(evaluator_blobs_read_total[5m])
+1 - rate(evaluator_blob_write_failures_total[5m]) / rate(evaluator_blob_write_attempts_total[5m])
+1 - rate(evaluator_block_read_failures_total[5m]) / rate(evaluator_block_read_attempts_total[5m])
+```
+
+The read success ratio is block-based because a failed block read cannot reveal how many blobs the block contained. Random DA archival reads and consensus `block_results` reads are not included in these direct counters.
+
 ## License
 
 Sovereign Permissionless Commercial License

@@ -1,18 +1,88 @@
-//! Custom Telegraf measurements emitted by this evaluator.
+//! Metrics emitted by this evaluator.
 //!
-//! These ride the *same* global metrics tracker that `init_metrics_tracker`
-//! (called in `main`) installs, so they flow to the same Telegraf socket as the
-//! adapter's own `sov_celestia_adapter_*` measurements — no separate pipeline.
+//! The existing measurements use the global Telegraf tracker installed by
+//! `init_metrics_tracker`. Blob I/O counters use the optional direct Prometheus
+//! exporter.
 
-use std::io::Write;
+use std::{io::Write, net::SocketAddr};
 
+use metrics_exporter_prometheus::PrometheusBuilder;
 use sov_metrics::{Metric, track_metrics};
+
+const BLOB_WRITE_ATTEMPTS: &str = "evaluator_blob_write_attempts_total";
+const BLOB_WRITE_FAILURES: &str = "evaluator_blob_write_failures_total";
+const BLOB_WRITE_BYTES: &str = "evaluator_blob_write_bytes_total";
+const BLOCK_READ_ATTEMPTS: &str = "evaluator_block_read_attempts_total";
+const BLOCK_READ_FAILURES: &str = "evaluator_block_read_failures_total";
+const BLOBS_READ: &str = "evaluator_blobs_read_total";
+const BLOB_READ_BYTES: &str = "evaluator_blob_read_bytes_total";
 
 /// Version this binary was built at: the git tag when HEAD was tagged, otherwise
 /// the short commit SHA (or `"unknown"` for a build with neither). Resolved by
 /// `build.rs` at compile time and carried as the `version` tag on
 /// [`BuildInfoMeasurement`].
 pub const BUILD_VERSION: &str = env!("EVALUATOR_BUILD_VERSION");
+
+pub fn init_prometheus(bind: SocketAddr) -> Result<(), metrics_exporter_prometheus::BuildError> {
+    PrometheusBuilder::new()
+        .with_http_listener(bind)
+        .install()?;
+
+    describe_prometheus_metrics();
+    initialize_prometheus_counters();
+    Ok(())
+}
+
+fn describe_prometheus_metrics() {
+    ::metrics::describe_counter!(BLOB_WRITE_ATTEMPTS, "Completed blob write attempts");
+    ::metrics::describe_counter!(BLOB_WRITE_FAILURES, "Failed blob write attempts");
+    ::metrics::describe_counter!(BLOB_WRITE_BYTES, "Payload bytes written successfully");
+    ::metrics::describe_counter!(
+        BLOCK_READ_ATTEMPTS,
+        "Completed sequential block read attempts"
+    );
+    ::metrics::describe_counter!(BLOCK_READ_FAILURES, "Failed sequential block read attempts");
+    ::metrics::describe_counter!(BLOBS_READ, "Batch blobs read and verified successfully");
+    ::metrics::describe_counter!(
+        BLOB_READ_BYTES,
+        "Batch blob payload bytes read and verified successfully"
+    );
+}
+
+fn initialize_prometheus_counters() {
+    for name in [
+        BLOB_WRITE_ATTEMPTS,
+        BLOB_WRITE_FAILURES,
+        BLOB_WRITE_BYTES,
+        BLOCK_READ_ATTEMPTS,
+        BLOCK_READ_FAILURES,
+        BLOBS_READ,
+        BLOB_READ_BYTES,
+    ] {
+        ::metrics::counter!(name).increment(0);
+    }
+}
+
+pub fn record_blob_write_success(bytes: usize) {
+    ::metrics::counter!(BLOB_WRITE_ATTEMPTS).increment(1);
+    ::metrics::counter!(BLOB_WRITE_BYTES).increment(bytes as u64);
+}
+
+pub fn record_blob_write_failure() {
+    ::metrics::counter!(BLOB_WRITE_ATTEMPTS).increment(1);
+    ::metrics::counter!(BLOB_WRITE_FAILURES).increment(1);
+}
+
+pub fn record_block_read_success(blob_count: usize, bytes: usize) {
+    ::metrics::counter!(BLOCK_READ_ATTEMPTS).increment(1);
+    ::metrics::counter!(BLOBS_READ).increment(blob_count as u64);
+    ::metrics::counter!(BLOB_READ_BYTES).increment(bytes as u64);
+}
+
+pub fn record_block_read_failure() {
+    ::metrics::counter!(BLOCK_READ_ATTEMPTS).increment(1);
+    ::metrics::counter!(BLOCK_READ_FAILURES).increment(1);
+}
 
 /// The running binary's build version, following the Prometheus `*_build_info`
 /// convention: the useful information rides as a *tag* (`version`) and the field
@@ -162,6 +232,8 @@ pub fn emit<M: Metric + 'static>(measurement: M) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::metrics::with_local_recorder;
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use sov_metrics::{MonitoringConfig, init_metrics_tracker};
     use sov_rollup_interface::node::SecondaryShutdownController;
     use std::time::Duration;
@@ -262,5 +334,42 @@ mod tests {
             build_info.starts_with("evaluator_build,version=v1.2.3 info=1i"),
             "unexpected build info line: {build_info}"
         );
+    }
+
+    #[test]
+    fn prometheus_counters_render_expected_values() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        with_local_recorder(&recorder, || {
+            describe_prometheus_metrics();
+            initialize_prometheus_counters();
+            record_blob_write_success(1024);
+            record_blob_write_failure();
+            record_block_read_success(3, 4096);
+            record_block_read_failure();
+        });
+        handle.run_upkeep();
+
+        let output = handle.render();
+        assert!(
+            output.contains(
+                "# HELP evaluator_blob_write_attempts_total Completed blob write attempts"
+            )
+        );
+        for expected in [
+            "evaluator_blob_write_attempts_total 2",
+            "evaluator_blob_write_failures_total 1",
+            "evaluator_blob_write_bytes_total 1024",
+            "evaluator_block_read_attempts_total 2",
+            "evaluator_block_read_failures_total 1",
+            "evaluator_blobs_read_total 3",
+            "evaluator_blob_read_bytes_total 4096",
+        ] {
+            assert!(
+                output.contains(expected),
+                "missing {expected:?} in:\n{output}"
+            );
+        }
     }
 }

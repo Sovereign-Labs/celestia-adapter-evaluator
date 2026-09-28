@@ -19,6 +19,8 @@ bip39 = "2"
 tokio = { version = "1.48", features = ["full"] }
 tracing = { version = "0.1.43" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 
 # CometBFT consensus RPC client for the historical `block_results` read loop.
 tendermint = "0.40"
