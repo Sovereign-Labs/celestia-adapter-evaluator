@@ -16,7 +16,7 @@ use sov_celestia_adapter::{
     BlockHeaderTrait, CelestiaConfig, CelestiaService, CompressOnSubmit, DaService, DaVerifier,
     MonitoringConfig, init_metrics_tracker,
 };
-use sov_rollup_interface::node::SecondaryShutdownController;
+use sov_shutdown::SecondaryShutdownController;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
