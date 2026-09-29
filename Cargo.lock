@@ -439,8 +439,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-client"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ad0c39f5a5461573f3234c00bb1bf02ef35c51e79610526469cb0518c3b50f6"
 dependencies = [
  "async-stream",
  "blockstore",
@@ -467,8 +468,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-fibre"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "510b11e1de3c2c14f05cc5ffe3c92173d031800bb434b1c858134c7310d9caac"
 dependencies = [
  "async-trait",
  "bytes",
@@ -506,8 +508,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-grpc"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28b7728a3627daf30a6fec3ce0fe832c29bac4b7f629fccabf68f9e751bd57dc"
 dependencies = [
  "async-trait",
  "bytes",
@@ -545,8 +548,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-grpc-macros"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cc041965ffff939e09ea974c0c73f90f81defb333175fd98cda1242318cd221"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -555,8 +559,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-proto"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5da02f90fe79e24d5bb2afdb954fe1a8a155730882f6cc6afe62541b895894b6"
 dependencies = [
  "bytes",
  "prost",
@@ -573,8 +578,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-rpc"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5670f582011a2fa1250b0301927646a59904a6c6a431037a1d6660749d7d789d"
 dependencies = [
  "async-stream",
  "base64 0.22.1",
@@ -600,8 +606,9 @@ dependencies = [
 
 [[package]]
 name = "celestia-types"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "776c7431760c085af7331812629cc13144eeb6dd5051f459334c74f2b6e0ceb0"
 dependencies = [
  "base64 0.22.1",
  "bech32",
@@ -2380,8 +2387,9 @@ dependencies = [
 
 [[package]]
 name = "lumina-utils"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86a02469dc5f4f59dc52938c36582b1b9ec4ab0475ab1deb7cac2b21378e493e"
 dependencies = [
  "futures",
  "gloo-timers 0.3.0",
@@ -3159,8 +3167,9 @@ dependencies = [
 
 [[package]]
 name = "rsema1d"
-version = "1.2.0-rc.1"
-source = "git+https://github.com/celestiaorg/lumina.git?rev=bfe0474dfe9d101c9c029125d20fc6189375ef93#bfe0474dfe9d101c9c029125d20fc6189375ef93"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c171a3ad099bed03b31acb1680afec62cf4bfeb2e42b98f952947643f9d8234c"
 dependencies = [
  "bytes",
  "hex",
@@ -3790,7 +3799,7 @@ dependencies = [
 [[package]]
 name = "sov-celestia-adapter"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3824,7 +3833,7 @@ dependencies = [
 [[package]]
 name = "sov-metrics"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "anyhow",
  "bincode",
@@ -3844,7 +3853,7 @@ dependencies = [
 [[package]]
 name = "sov-modules-macros"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "anyhow",
  "bech32",
@@ -3866,7 +3875,7 @@ dependencies = [
 [[package]]
 name = "sov-rollup-interface"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3892,7 +3901,7 @@ dependencies = [
 [[package]]
 name = "sov-shutdown"
 version = "0.3.0"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "tokio",
  "tracing",
@@ -3902,7 +3911,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "bech32",
  "borsh",
@@ -3918,7 +3927,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macro-helpers"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "bech32",
  "borsh",
@@ -3933,7 +3942,7 @@ dependencies = [
 [[package]]
 name = "sov-universal-wallet-macros"
 version = "0.4.1"
-source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=effd41a9bda063661958d3daaff9d47728380a25#effd41a9bda063661958d3daaff9d47728380a25"
+source = "git+https://github.com/Sovereign-Labs/sovereign-sdk.git?rev=7f712c59f587d2f694ba3d494171377b580d31b6#7f712c59f587d2f694ba3d494171377b580d31b6"
 dependencies = [
  "sov-universal-wallet-macro-helpers",
  "syn 2.0.118",
