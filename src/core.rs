@@ -20,12 +20,18 @@ use crate::metrics::{
 
 pub enum ResultEvent {
     Submit(anyhow::Result<usize>),
-    Read(anyhow::Result<usize>),
+    Read(anyhow::Result<ReadOutcome>),
     /// One historical `block_results` read on the consensus RPC.
     ConsensusRead(anyhow::Result<()>),
     /// One archival `get_block_at` read on the DA (bridge) node. `Ok` carries the
     /// number of batch blobs read at that height.
     ArchivalRead(anyhow::Result<usize>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ReadOutcome {
+    pub blob_count: usize,
+    pub total_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -230,6 +236,7 @@ pub async fn run_stats_collector(
             result = result_rx.recv() => {
                 match result {
                     Some(ResultEvent::Submit(Ok(bytes_sent))) => {
+                        metrics::record_blob_write_success(bytes_sent);
                         stats.success_count += 1;
                         stats.successful_bytes += bytes_sent;
                         tracing::info!(
@@ -238,6 +245,7 @@ pub async fn run_stats_collector(
                             "Submission succeeded");
                     }
                     Some(ResultEvent::Submit(Err(error))) => {
+                        metrics::record_blob_write_failure();
                         stats.error_count += 1;
                         tracing::info!(
                             ?error,
@@ -245,15 +253,17 @@ pub async fn run_stats_collector(
                             total_failed = stats.error_count,
                             "Submission failed");
                     }
-                    Some(ResultEvent::Read(Ok(blobs))) => {
+                    Some(ResultEvent::Read(Ok(outcome))) => {
+                        metrics::record_block_read_success(outcome.blob_count, outcome.total_bytes);
                         stats.blocks_read_success += 1;
-                        stats.blobs_read += blobs as u64;
+                        stats.blobs_read += outcome.blob_count as u64;
                         tracing::info!(
                             blocks_read_success = stats.blocks_read_success,
                             blobs_read = stats.blobs_read,
                             "Block read succeeded");
                     }
                     Some(ResultEvent::Read(Err(error))) => {
+                        metrics::record_block_read_failure();
                         stats.block_read_error += 1;
                         tracing::info!(
                             ?error,
@@ -369,8 +379,8 @@ pub async fn run_reading_loop(
             _ = shutdown_controller.wait_for_shutdown() => break,
         };
 
-        if let Ok(blobs) = &result {
-            tracing::debug!(height, blobs, "Read block");
+        if let Ok(outcome) = &result {
+            tracing::debug!(height, blobs = outcome.blob_count, "Read block");
             height = height.checked_add(1).unwrap();
         }
         let _ = result_tx.send(ResultEvent::Read(result));
@@ -382,9 +392,15 @@ async fn read_block(
     celestia_service: &CelestiaService,
     height: u64,
     verifier: &CelestiaVerifier,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<ReadOutcome> {
     let block = celestia_service.get_block_at(height).await?;
     let mut relevant_blobs = celestia_service.extract_relevant_blobs(&block);
+    let blob_count = relevant_blobs.batch_blobs.len();
+    let total_bytes = relevant_blobs
+        .batch_blobs
+        .iter()
+        .map(BlobReaderTrait::total_len)
+        .sum();
 
     for blob in relevant_blobs
         .batch_blobs
@@ -400,7 +416,10 @@ async fn read_block(
 
     verifier.verify_relevant_tx_list(block.header(), &relevant_blobs, relevant_proofs)?;
 
-    Ok(relevant_blobs.batch_blobs.len())
+    Ok(ReadOutcome {
+        blob_count,
+        total_bytes,
+    })
 }
 
 /// One recent-tip read via the sequential [`run_reading_loop`]: time the same
@@ -418,13 +437,13 @@ async fn recent_read_once(
     celestia_service: &CelestiaService,
     verifier: &CelestiaVerifier,
     height: u64,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<ReadOutcome> {
     let start = Instant::now();
     let result = read_block(celestia_service, height, verifier).await;
     let response_time_us = start.elapsed().as_micros();
 
     let (is_success, blob_count) = match &result {
-        Ok(blobs) => (true, *blobs as u64),
+        Ok(outcome) => (true, outcome.blob_count as u64),
         Err(_) => (false, 0),
     };
     metrics::emit(RecentReadMeasurement {
@@ -568,7 +587,7 @@ pub async fn da_read_once(
     let response_time_us = start.elapsed().as_micros();
 
     let (is_success, blob_count) = match &result {
-        Ok(blobs) => (true, *blobs as u64),
+        Ok(outcome) => (true, outcome.blob_count as u64),
         Err(_) => (false, 0),
     };
     metrics::emit(DaArchivalReadMeasurement {
@@ -577,7 +596,7 @@ pub async fn da_read_once(
         response_time_us,
         blob_count,
     });
-    ResultEvent::ArchivalRead(result)
+    ResultEvent::ArchivalRead(result.map(|outcome| outcome.blob_count))
 }
 
 #[cfg(test)]

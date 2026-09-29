@@ -2,6 +2,7 @@ mod consensus;
 mod core;
 mod metrics;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,10 @@ const BUILD_INFO_EMIT_INTERVAL: Duration = Duration::from_secs(30);
 #[command(name = "celestia-adapter-evaluator", version = metrics::BUILD_VERSION)]
 #[command(about = "Celestia Adapter Evaluator", long_about = None)]
 struct Cli {
+    /// Address for the optional Prometheus scrape endpoint.
+    #[arg(long, global = true)]
+    prometheus_exporter_bind: Option<SocketAddr>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -322,6 +327,14 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
+
+    if let Some(bind) = cli.prometheus_exporter_bind {
+        if let Err(error) = metrics::init_prometheus(bind) {
+            eprintln!("Failed to start Prometheus exporter on {bind}: {error}");
+            std::process::exit(2);
+        }
+        tracing::info!(%bind, "Prometheus metrics enabled");
+    }
 
     let shutdown_controller = SecondaryShutdownController::new();
 
@@ -935,6 +948,58 @@ mod tests {
             panic!("expected submit-and-read command");
         };
         args
+    }
+
+    #[test]
+    fn prometheus_exporter_is_opt_in() {
+        let cli = Cli::parse_from([
+            "celestia-adapter-evaluator",
+            "sync-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--from-height",
+            "123",
+        ]);
+        assert!(cli.prometheus_exporter_bind.is_none());
+    }
+
+    #[test]
+    fn prometheus_exporter_bind_parses_globally() {
+        let after_subcommand = Cli::parse_from([
+            "celestia-adapter-evaluator",
+            "sync-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--from-height",
+            "123",
+            "--prometheus-exporter-bind",
+            "[::1]:9845",
+        ]);
+        assert_eq!(
+            after_subcommand.prometheus_exporter_bind,
+            Some("[::1]:9845".parse().unwrap())
+        );
+
+        let before_subcommand = Cli::parse_from([
+            "celestia-adapter-evaluator",
+            "--prometheus-exporter-bind",
+            "[::1]:9845",
+            "sync-and-read",
+            "--namespace",
+            "myrollup00",
+            "--rpc-endpoint",
+            "http://localhost:26657",
+            "--from-height",
+            "123",
+        ]);
+        assert_eq!(
+            before_subcommand.prometheus_exporter_bind,
+            Some("[::1]:9845".parse().unwrap())
+        );
     }
 
     #[test]
