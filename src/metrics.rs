@@ -163,7 +163,7 @@ pub fn emit<M: Metric + 'static>(measurement: M) {
 mod tests {
     use super::*;
     use sov_metrics::{MonitoringConfig, init_metrics_tracker};
-    use sov_rollup_interface::node::SecondaryShutdownController;
+    use sov_shutdown::SecondaryShutdownController;
     use std::time::Duration;
     use tokio::net::UdpSocket;
 
