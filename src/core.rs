@@ -3,9 +3,9 @@ use rand::Rng;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use sov_celestia_adapter::verifier::CelestiaVerifier;
 use sov_celestia_adapter::{
-    BlobReaderTrait, BlockHeaderTrait, CelestiaService, DaService, DaVerifier, SlotData,
+    BlobReaderTrait, BlockHeaderTrait, CelestiaService, DaService, DaVerifier,
 };
-use sov_rollup_interface::node::SecondaryShutdownController;
+use sov_shutdown::SecondaryShutdownController;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
