@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use crate::consensus;
 use crate::metrics::{
-    self, ConsensusReadMeasurement, DaArchivalReadMeasurement, RecentReadMeasurement,
+    self, ConsensusReadMeasurement, DaArchivalReadMeasurement, RecentReadMeasurement, SloOperation,
 };
 
 pub enum ResultEvent {
@@ -80,7 +80,13 @@ pub async fn run_submission_loop(
         let blob_source = blob_source.clone();
 
         submission_tasks.spawn(async move {
+            let start = Instant::now();
             let result = submit_blob(&service, &blob_source, total_submission_timeout).await;
+            metrics::record_slo_operation(
+                SloOperation::PayForBlob,
+                result.is_ok(),
+                start.elapsed(),
+            );
             let _ = tx.send(ResultEvent::Submit(result));
             drop(permit);
         });
@@ -421,7 +427,8 @@ async fn recent_read_once(
 ) -> anyhow::Result<usize> {
     let start = Instant::now();
     let result = read_block(celestia_service, height, verifier).await;
-    let response_time_us = start.elapsed().as_micros();
+    let duration = start.elapsed();
+    let response_time_us = duration.as_micros();
 
     let (is_success, blob_count) = match &result {
         Ok(blobs) => (true, *blobs as u64),
@@ -433,6 +440,7 @@ async fn recent_read_once(
         response_time_us,
         blob_count,
     });
+    metrics::record_slo_operation(SloOperation::RecentBlockRead, result.is_ok(), duration);
     result
 }
 

@@ -182,6 +182,25 @@ It is possible to use https://github.com/Sovereign-Labs/sov-observability to col
 Clone https://github.com/Sovereign-Labs/sov-observability and run it with `make start`.
 Data from the tool will be visible in the "Sovereign Celestia Adapter" dashboard.
 
+### SLO metrics
+
+The evaluator publishes cumulative operation counters and histograms through
+the same UDP line-protocol metrics pipeline:
+
+```text
+celestia_adapter_evaluator_operations_total{operation="pay_for_blob|recent_block_read",outcome="success|failure"}
+celestia_adapter_evaluator_operation_duration_seconds_bucket{operation="pay_for_blob|recent_block_read",le="..."}
+celestia_adapter_evaluator_operation_duration_seconds_sum{operation="pay_for_blob|recent_block_read"}
+celestia_adapter_evaluator_operation_duration_seconds_count{operation="pay_for_blob|recent_block_read"}
+```
+
+Each completed operation increments one outcome counter and is included in the
+duration histogram, whether it succeeds or fails. Work cancelled during
+shutdown is excluded. The histogram boundaries are 0.25, 0.5, 1, 2, 4, 8, 12,
+16, 30, 60, and `+Inf` seconds. All values reset when the evaluator restarts
+and are refreshed every 30 seconds so inactive series remain available through
+Telegraf.
+
 ## License
 
 Sovereign Permissionless Commercial License
