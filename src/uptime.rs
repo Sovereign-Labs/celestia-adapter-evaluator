@@ -4,7 +4,8 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use celestia_client::types::state::ErrorCode;
+use celestia_client::{Error as ClientError, types::state::ErrorCode};
+use celestia_grpc::Error as GrpcError;
 use sov_metrics::Metric;
 
 use crate::metrics;
@@ -43,26 +44,33 @@ impl Outcome {
 /// caller errors, local faults and unrecognized errors remain unknown.
 pub fn classify(error: &anyhow::Error) -> Outcome {
     for cause in error.chain() {
-        if let Some(celestia_client::Error::Grpc(error)) = cause.downcast_ref() {
-            use celestia_grpc::Error as E;
-            return match error {
-                error if error.is_network_error() => Outcome::Failure,
-                E::TxExecutionFailed(_, code, _)
-                | E::TxBroadcastFailed(_, code, _)
-                | E::TxRejected(_, code, _) => match code {
-                    ErrorCode::MempoolIsFull
-                    | ErrorCode::Logic
-                    | ErrorCode::IO
-                    | ErrorCode::AppConfig
-                    | ErrorCode::Panic => Outcome::Failure,
-                    _ => Outcome::Unknown,
-                },
-                E::FailedToParseResponse | E::UnexpectedResponseType(_) => Outcome::Failure,
-                _ => Outcome::Unknown,
-            };
-        }
+        let Some(ClientError::Grpc(error)) = cause.downcast_ref() else {
+            continue;
+        };
+        return if is_confirmed_service_failure(error) {
+            Outcome::Failure
+        } else {
+            Outcome::Unknown
+        };
     }
     Outcome::Unknown
+}
+
+fn is_confirmed_service_failure(error: &GrpcError) -> bool {
+    match error {
+        GrpcError::TxExecutionFailed(_, code, _)
+        | GrpcError::TxBroadcastFailed(_, code, _)
+        | GrpcError::TxRejected(_, code, _) => matches!(
+            code,
+            ErrorCode::MempoolIsFull
+                | ErrorCode::Logic
+                | ErrorCode::IO
+                | ErrorCode::AppConfig
+                | ErrorCode::Panic
+        ),
+        GrpcError::FailedToParseResponse | GrpcError::UnexpectedResponseType(_) => true,
+        _ => error.is_network_error(),
+    }
 }
 
 fn unix_now() -> f64 {
