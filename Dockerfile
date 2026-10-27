@@ -15,10 +15,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY constants.toml ./
 COPY build.rs ./
 COPY src ./src
-# Standard checkouts derive the version from .git. Linked worktree builds pass
-# their exact revision with --build-arg EVALUATOR_BUILD_VERSION=<revision>.
+# `build.rs` derives the version from git, so the build needs `.git`. This is the
+# last COPY before the build: it changes every commit and invalidates the layer,
+# but the dependency compile is preserved by the cache mounts below.
 COPY .git ./.git
-ARG EVALUATOR_BUILD_VERSION
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
