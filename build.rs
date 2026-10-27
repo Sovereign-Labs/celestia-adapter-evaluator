@@ -1,6 +1,7 @@
 //! Embed a build version into the binary at compile time, derived entirely from
-//! git (the same source in local, CI, and Docker builds — the Docker build copies
-//! `.git` in precisely so this works there too).
+//! git by default. Docker builds from linked worktrees can supply the exact
+//! source revision as EVALUATOR_BUILD_VERSION, since their .git is a pointer to
+//! a directory outside the build context.
 //!
 //! The version is: the tag on HEAD if one points exactly at it, otherwise the
 //! 12-char short commit SHA. There is no single `git describe` flag that yields
@@ -20,7 +21,12 @@ fn main() {
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/packed-refs");
 
-    let version = git_tag_or_sha().unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rerun-if-env-changed=EVALUATOR_BUILD_VERSION");
+    let version = std::env::var("EVALUATOR_BUILD_VERSION")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(git_tag_or_sha)
+        .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=EVALUATOR_BUILD_VERSION={version}");
 }
 

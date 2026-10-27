@@ -1,6 +1,7 @@
 mod consensus;
 mod core;
 mod metrics;
+mod uptime;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -347,6 +348,8 @@ async fn run_submit_and_read(
     args: SubmitAndReadArgs,
     shutdown_controller: &SecondaryShutdownController,
 ) {
+    let uptime = uptime::Tracker::new();
+    uptime.spawn_publisher(shutdown_controller.clone());
     tracing::info!("Mode: submit-and-read");
     tracing::info!("Namespace: {}", args.namespace);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
@@ -436,6 +439,7 @@ async fn run_submit_and_read(
         blob_source,
         max_in_flight,
         total_submission_timeout,
+        uptime,
         shutdown_controller.clone(),
     ));
     let verifier = CelestiaVerifier::new(params);

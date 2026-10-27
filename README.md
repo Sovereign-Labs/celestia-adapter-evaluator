@@ -182,6 +182,14 @@ It is possible to use https://github.com/Sovereign-Labs/sov-observability to col
 Clone https://github.com/Sovereign-Labs/sov-observability and run it with `make start`.
 Data from the tool will be visible in the "Sovereign Celestia Adapter" dashboard.
 
+## Service uptime SLO
+
+The Service uptime SLO targets 99.9% successful synthetic submissions over
+rolling 30 days through the configured proxy route. Submission results are
+independent of the recent and archival block readers; they do not prove that
+the submitted payload was read back. Missing measurements, unknown outcomes
+and lost state prevent a complete uptime verdict.
+
 ## License
 
 Sovereign Permissionless Commercial License

@@ -199,6 +199,9 @@ mod tests {
             blob_count: 3,
         });
         emit(BuildInfoMeasurement { version: "v1.2.3" });
+        let uptime = crate::uptime::Tracker::new();
+        uptime.start().finish(crate::uptime::Outcome::Success);
+        uptime.emit();
 
         // The publisher batches into ~508-byte datagrams and only flushes on fill
         // or shutdown; two small metrics won't fill it, so trigger the shutdown
@@ -214,7 +217,7 @@ mod tests {
             for line in std::str::from_utf8(&buf[..n]).unwrap().lines() {
                 lines.push(line.to_string());
             }
-            if lines.len() >= 4 {
+            if lines.len() >= 9 {
                 break;
             }
         }
@@ -261,6 +264,17 @@ mod tests {
         assert!(
             build_info.starts_with("evaluator_build,version=v1.2.3 info=1i"),
             "unexpected build info line: {build_info}"
+        );
+        assert!(lines.iter().any(|line| {
+            line.starts_with("evaluator_submission,outcome=success outcomes_total=1i")
+        }));
+        assert!(lines.iter().any(|line| {
+            line.starts_with("evaluator_submission,outcome=unknown outcomes_total=0i")
+        }));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("evaluator_submission started_total=1i,in_flight=0i"))
         );
     }
 }

@@ -423,6 +423,8 @@ dependencies = [
  "anyhow",
  "bip32",
  "bip39",
+ "celestia-client",
+ "celestia-grpc",
  "clap",
  "hex",
  "rand 0.8.6",
