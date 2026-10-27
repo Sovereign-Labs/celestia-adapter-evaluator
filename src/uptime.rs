@@ -99,6 +99,7 @@ struct State {
     last_ordered_outcome: f64,
     progress_at: Instant,
     outcome_at: Instant,
+    ordered_outcome_at: Instant,
     stale: bool,
 }
 
@@ -122,6 +123,7 @@ impl State {
             last_ordered_outcome: 0.0,
             progress_at: clock,
             outcome_at: clock,
+            ordered_outcome_at: clock,
             stale: false,
         }
     }
@@ -157,9 +159,6 @@ impl State {
         self.outcome_at = clock;
         self.last_duration = duration.as_secs_f64();
         self.duration_sum += self.last_duration;
-        if outcome != Outcome::Failure {
-            self.reset_streak();
-        }
         // A result whose ordering evidence was lost still counts once, but
         // cannot revive a stale streak or stand in for a newer submission.
         if let Some(pending) = self.pending.get_mut(&id) {
@@ -195,11 +194,18 @@ impl State {
         {
             let (_, pending) = self.pending.pop_first().unwrap();
             let (outcome, wall, clock) = pending.result.unwrap();
-            self.last_ordered_outcome = wall;
+            // Start order can differ from completion order. Select the newest
+            // completion's wall timestamp using its monotonic observation time.
+            if clock >= self.ordered_outcome_at {
+                self.ordered_outcome_at = clock;
+                self.last_ordered_outcome = wall;
+            }
             if outcome == Outcome::Failure {
                 self.consecutive_failures += 1;
                 let since = self.failure_since.get_or_insert(pending.start);
-                self.failure_span = clock.saturating_duration_since(*since).as_secs_f64();
+                self.failure_span = self
+                    .failure_span
+                    .max(clock.saturating_duration_since(*since).as_secs_f64());
             } else {
                 self.reset_streak();
             }
@@ -520,6 +526,8 @@ mod tests {
             Duration::from_secs(3),
         );
         assert_eq!(state.consecutive_failures, 2);
+        assert_eq!(state.last_ordered_outcome, 10.0);
+        assert_eq!(state.failure_span, 3.0);
         let f = state.start(11.0, clock + Duration::from_secs(10));
         state.finish(
             f,
@@ -572,14 +580,16 @@ mod tests {
         }
         assert_eq!(state.pending.len(), MAX_ORDERED_RESULTS);
         assert_eq!(state.ordering_gaps, 1);
-        state.finish(1, Outcome::Failure, 2.0, clock, Duration::ZERO);
-        assert_eq!(state.consecutive_failures, 0);
-        assert_eq!(state.outcomes, [0, 1, 0]);
         for id in 2..=MAX_ORDERED_RESULTS as u64 + 1 {
-            state.finish(id, Outcome::Success, 2.0, clock, Duration::ZERO);
+            state.finish(id, Outcome::Failure, 2.0, clock, Duration::ZERO);
         }
+        assert_eq!(state.consecutive_failures, MAX_ORDERED_RESULTS as u64);
+        // The oldest submission lost its ordering slot. Its eventual success
+        // still counts, but must not erase the newer ordered failures.
+        state.finish(1, Outcome::Success, 3.0, clock, Duration::ZERO);
+        assert_eq!(state.consecutive_failures, MAX_ORDERED_RESULTS as u64);
         assert_eq!(state.in_flight, 0);
-        assert_eq!(state.outcomes, [MAX_ORDERED_RESULTS as u64, 1, 0]);
+        assert_eq!(state.outcomes, [1, MAX_ORDERED_RESULTS as u64, 0]);
     }
 
     #[test]
