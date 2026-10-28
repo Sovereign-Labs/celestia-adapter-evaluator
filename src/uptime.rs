@@ -268,10 +268,7 @@ impl Tracker {
         }
     }
 
-    pub fn spawn_publisher(
-        &self,
-        shutdown: sov_rollup_interface::node::SecondaryShutdownController,
-    ) {
+    pub fn spawn_publisher(&self, shutdown: sov_shutdown::SecondaryShutdownController) {
         let tracker = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));

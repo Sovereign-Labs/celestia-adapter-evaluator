@@ -329,7 +329,10 @@ async fn main() {
     spawn_signal_listener(shutdown_controller.clone());
 
     let monitoring_config = MonitoringConfig::standard();
-    let _ = init_metrics_tracker(&monitoring_config, &shutdown_controller);
+    // Keep publication alive while workload tasks drain and emit terminal
+    // cancellation outcomes. The publisher drains its queue on shutdown.
+    let metrics_shutdown = SecondaryShutdownController::new();
+    let metrics_publisher = init_metrics_tracker(&monitoring_config, &metrics_shutdown);
 
     // Advertise the running build version as a metric, refreshed on an interval
     // so Telegraf never expires the series (see BUILD_INFO_EMIT_INTERVAL).
@@ -342,6 +345,10 @@ async fn main() {
     }
 
     shutdown_controller.shutdown();
+    metrics_shutdown.shutdown();
+    if let Some(publisher) = metrics_publisher {
+        publisher.await.expect("metrics publisher task failed");
+    }
 }
 
 async fn run_submit_and_read(
