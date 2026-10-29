@@ -17,6 +17,7 @@ use crate::consensus;
 use crate::metrics::{
     self, ConsensusReadMeasurement, DaArchivalReadMeasurement, RecentReadMeasurement,
 };
+use crate::uptime::{Outcome, Tracker, classify};
 
 pub enum ResultEvent {
     Submit(anyhow::Result<usize>),
@@ -51,7 +52,7 @@ pub async fn run_submission_loop(
     blob_source: Arc<BlobSource>,
     max_in_flight: usize,
     total_submission_timeout: std::time::Duration,
-    uptime: crate::uptime::Tracker,
+    uptime: Tracker,
     shutdown_controller: SecondaryShutdownController,
 ) {
     tracing::info!(max_in_flight, "Starting submission loop");
@@ -86,8 +87,8 @@ pub async fn run_submission_loop(
         submission_tasks.spawn(async move {
             let result = submit_blob(&service, &blob_source, total_submission_timeout).await;
             let outcome = match &result {
-                Ok(_) => crate::uptime::Outcome::Success,
-                Err(error) => crate::uptime::classify(error),
+                Ok(_) => Outcome::Success,
+                Err(error) => classify(error),
             };
             observation.finish(outcome);
             let _ = tx.send(ResultEvent::Submit(result));

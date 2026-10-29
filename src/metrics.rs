@@ -162,6 +162,7 @@ pub fn emit<M: Metric + 'static>(measurement: M) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uptime::{Outcome, Tracker};
     use sov_metrics::{MonitoringConfig, init_metrics_tracker};
     use sov_shutdown::SecondaryShutdownController;
     use std::time::Duration;
@@ -200,8 +201,8 @@ mod tests {
             blob_count: 3,
         });
         emit(BuildInfoMeasurement { version: "v1.2.3" });
-        let uptime = crate::uptime::Tracker::new();
-        uptime.start().finish(crate::uptime::Outcome::Success);
+        let uptime = Tracker::new();
+        uptime.start().finish(Outcome::Success);
         uptime.emit();
 
         // Match application shutdown ordering: cancellation outcomes must still

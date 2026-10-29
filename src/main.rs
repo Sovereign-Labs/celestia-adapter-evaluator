@@ -11,6 +11,7 @@ use crate::core::{
     Stats, consensus_read_once, da_read_once, run_random_read_loop, run_reading_loop,
     run_stats_collector, run_submission_loop,
 };
+use crate::uptime::Tracker;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use sov_celestia_adapter::verifier::{CelestiaVerifier, RollupParams};
 use sov_celestia_adapter::{
@@ -355,7 +356,7 @@ async fn run_submit_and_read(
     args: SubmitAndReadArgs,
     shutdown_controller: &SecondaryShutdownController,
 ) {
-    let uptime = uptime::Tracker::new();
+    let uptime = Tracker::new();
     uptime.spawn_publisher(shutdown_controller.clone());
     tracing::info!("Mode: submit-and-read");
     tracing::info!("Namespace: {}", args.namespace);
