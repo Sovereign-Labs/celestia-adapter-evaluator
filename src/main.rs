@@ -1,6 +1,7 @@
 mod consensus;
 mod core;
 mod metrics;
+mod uptime;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,6 +11,7 @@ use crate::core::{
     Stats, consensus_read_once, da_read_once, run_random_read_loop, run_reading_loop,
     run_stats_collector, run_submission_loop,
 };
+use crate::uptime::Tracker;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use sov_celestia_adapter::verifier::{CelestiaVerifier, RollupParams};
 use sov_celestia_adapter::{
@@ -328,7 +330,10 @@ async fn main() {
     spawn_signal_listener(shutdown_controller.clone());
 
     let monitoring_config = MonitoringConfig::standard();
-    let _ = init_metrics_tracker(&monitoring_config, &shutdown_controller);
+    // Keep publication alive while workload tasks drain and emit terminal
+    // cancellation outcomes. The publisher drains its queue on shutdown.
+    let metrics_shutdown = SecondaryShutdownController::new();
+    let metrics_publisher = init_metrics_tracker(&monitoring_config, &metrics_shutdown);
 
     // Advertise the running build version as a metric, refreshed on an interval
     // so Telegraf never expires the series (see BUILD_INFO_EMIT_INTERVAL).
@@ -341,12 +346,18 @@ async fn main() {
     }
 
     shutdown_controller.shutdown();
+    metrics_shutdown.shutdown();
+    if let Some(publisher) = metrics_publisher {
+        publisher.await.expect("metrics publisher task failed");
+    }
 }
 
 async fn run_submit_and_read(
     args: SubmitAndReadArgs,
     shutdown_controller: &SecondaryShutdownController,
 ) {
+    let uptime = Tracker::new();
+    uptime.spawn_publisher(shutdown_controller.clone());
     tracing::info!("Mode: submit-and-read");
     tracing::info!("Namespace: {}", args.namespace);
     tracing::info!("Run for seconds: {}", args.run_for_seconds);
@@ -436,6 +447,7 @@ async fn run_submit_and_read(
         blob_source,
         max_in_flight,
         total_submission_timeout,
+        uptime,
         shutdown_controller.clone(),
     ));
     let verifier = CelestiaVerifier::new(params);
