@@ -162,6 +162,7 @@ pub fn emit<M: Metric + 'static>(measurement: M) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::uptime::{Outcome, Tracker};
     use sov_metrics::{MonitoringConfig, init_metrics_tracker};
     use sov_shutdown::SecondaryShutdownController;
     use std::time::Duration;
@@ -177,7 +178,8 @@ mod tests {
         let port = socket.local_addr().unwrap().port();
 
         let shutdown = SecondaryShutdownController::new();
-        init_metrics_tracker(&MonitoringConfig::default_on_port(port), &shutdown);
+        let publisher = init_metrics_tracker(&MonitoringConfig::default_on_port(port), &shutdown)
+            .expect("test initializes the metrics tracker once");
 
         emit(ConsensusReadMeasurement {
             is_success: true,
@@ -199,11 +201,23 @@ mod tests {
             blob_count: 3,
         });
         emit(BuildInfoMeasurement { version: "v1.2.3" });
+        let uptime = Tracker::new();
+        uptime.start().finish(Outcome::Success);
+        uptime.emit();
+
+        // Match application shutdown ordering: cancellation outcomes must still
+        // reach the publisher after the workload has stopped.
+        let workload_shutdown = SecondaryShutdownController::new();
+        let canceled_submission = uptime.start();
+        workload_shutdown.shutdown();
+        drop(canceled_submission);
+        uptime.emit();
 
         // The publisher batches into ~508-byte datagrams and only flushes on fill
         // or shutdown; two small metrics won't fill it, so trigger the shutdown
         // drain to force the buffered metrics onto the socket now.
         shutdown.shutdown();
+        publisher.await.unwrap();
 
         // Collect datagrams for a moment (order/batching is up to the publisher).
         let mut lines = Vec::new();
@@ -214,7 +228,9 @@ mod tests {
             for line in std::str::from_utf8(&buf[..n]).unwrap().lines() {
                 lines.push(line.to_string());
             }
-            if lines.len() >= 4 {
+            if lines.iter().any(|line| {
+                line.starts_with("evaluator_submission,outcome=unknown outcomes_total=1i")
+            }) {
                 break;
             }
         }
@@ -261,6 +277,17 @@ mod tests {
         assert!(
             build_info.starts_with("evaluator_build,version=v1.2.3 info=1i"),
             "unexpected build info line: {build_info}"
+        );
+        assert!(lines.iter().any(|line| {
+            line.starts_with("evaluator_submission,outcome=success outcomes_total=1i")
+        }));
+        assert!(lines.iter().any(|line| {
+            line.starts_with("evaluator_submission,outcome=unknown outcomes_total=0i")
+        }));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("evaluator_submission started_total=2i,in_flight=0i"))
         );
     }
 }

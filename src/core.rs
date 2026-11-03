@@ -17,6 +17,7 @@ use crate::consensus;
 use crate::metrics::{
     self, ConsensusReadMeasurement, DaArchivalReadMeasurement, RecentReadMeasurement,
 };
+use crate::uptime::{Outcome, Tracker, classify};
 
 pub enum ResultEvent {
     Submit(anyhow::Result<usize>),
@@ -43,6 +44,7 @@ pub struct Stats {
     pub da_archival_blobs_read: u64,
 }
 
+#[allow(clippy::too_many_arguments)] // Keep the existing workload parameters unchanged.
 pub async fn run_submission_loop(
     celestia_service: Arc<CelestiaService>,
     finish_time: Instant,
@@ -50,6 +52,7 @@ pub async fn run_submission_loop(
     blob_source: Arc<BlobSource>,
     max_in_flight: usize,
     total_submission_timeout: std::time::Duration,
+    uptime: Tracker,
     shutdown_controller: SecondaryShutdownController,
 ) {
     tracing::info!(max_in_flight, "Starting submission loop");
@@ -65,6 +68,7 @@ pub async fn run_submission_loop(
             _ = interval.tick() => {}
             _ = shutdown_controller.wait_for_shutdown() => { shutting_down = true; break; }
         }
+        uptime.progress();
 
         let permit = tokio::select! {
             permit = semaphore.clone().acquire_owned() => permit.unwrap(),
@@ -78,9 +82,15 @@ pub async fn run_submission_loop(
         let service = celestia_service.clone();
         let tx = result_tx.clone();
         let blob_source = blob_source.clone();
+        let observation = uptime.start();
 
         submission_tasks.spawn(async move {
             let result = submit_blob(&service, &blob_source, total_submission_timeout).await;
+            let outcome = match &result {
+                Ok(_) => Outcome::Success,
+                Err(error) => classify(error),
+            };
+            observation.finish(outcome);
             let _ = tx.send(ResultEvent::Submit(result));
             drop(permit);
         });
@@ -109,6 +119,7 @@ pub async fn run_submission_loop(
 
     // Final drain: no-op if already drained; quickly reaps aborted tasks otherwise.
     while submission_tasks.join_next().await.is_some() {}
+    uptime.emit();
 }
 
 fn generate_random_blob(blob_size_min: usize, blob_size_max: usize) -> Vec<u8> {
