@@ -40,10 +40,22 @@ impl Outcome {
     }
 }
 
-/// Only structured evidence establishes a service failure. Ambiguous auth,
-/// caller errors, local faults and unrecognized errors remain unknown.
+/// Adapter request timeout message, which `sov-celestia-adapter` raises as an
+/// untyped `anyhow!` error after exhausting its retries.
+// TODO: replace with a typed downcast once the adapter preserves the timeout
+// as a structured error source.
+const ADAPTER_TIMEOUT: &str = "await timeout";
+
+/// Only structured service evidence or an exhausted submission deadline
+/// establishes a service failure. Ambiguous auth, caller errors, local faults
+/// and unrecognized errors remain unknown.
 pub fn classify(error: &anyhow::Error) -> Outcome {
     for cause in error.chain() {
+        // A proxy that stops responding surfaces only as a timeout, either the
+        // evaluator's own submission deadline or the adapter's request timeout.
+        if cause.is::<tokio::time::error::Elapsed>() || cause.to_string() == ADAPTER_TIMEOUT {
+            return Outcome::Failure;
+        }
         let Some(ClientError::Grpc(error)) = cause.downcast_ref() else {
             continue;
         };
@@ -200,20 +212,24 @@ impl State {
                 self.ordered_outcome_at = clock;
                 self.last_ordered_outcome = wall;
             }
-            if outcome == Outcome::Failure {
-                self.consecutive_failures += 1;
-                let since = self.failure_since.get_or_insert(pending.start);
-                self.failure_span = self
-                    .failure_span
-                    .max(clock.saturating_duration_since(*since).as_secs_f64());
-            } else {
-                self.reset_streak();
+            // Unknown results carry no evidence either way, so they neither
+            // extend nor break a failure streak; only a success breaks it.
+            match outcome {
+                Outcome::Failure => {
+                    self.consecutive_failures += 1;
+                    let since = self.failure_since.get_or_insert(pending.start);
+                    self.failure_span = self
+                        .failure_span
+                        .max(clock.saturating_duration_since(*since).as_secs_f64());
+                }
+                Outcome::Success => self.reset_streak(),
+                Outcome::Unknown => {}
             }
         }
         if self.pending.values().any(|pending| {
             pending
                 .result
-                .is_some_and(|(outcome, _, _)| outcome != Outcome::Failure)
+                .is_some_and(|(outcome, _, _)| outcome == Outcome::Success)
         }) {
             self.reset_streak();
         }
@@ -455,9 +471,26 @@ mod tests {
             Outcome::Unknown
         );
         assert_eq!(
-            classify(&anyhow::anyhow!("await timeout")),
+            classify(&anyhow::anyhow!("request await timeout exceeded")),
             Outcome::Unknown
         );
+    }
+
+    #[tokio::test]
+    async fn submission_timeouts_are_failures() {
+        // Mirrors the adapter: untyped timeout, retried, then wrapped by
+        // `send_transaction` and the evaluator.
+        let adapter = anyhow::anyhow!(ADAPTER_TIMEOUT)
+            .context("Batch submit")
+            .context("awaiting on channel receiver result");
+        assert_eq!(classify(&adapter), Outcome::Failure);
+
+        // The evaluator's own deadline around `send_transaction`.
+        let elapsed = tokio::time::timeout(Duration::ZERO, std::future::pending::<()>())
+            .await
+            .unwrap_err();
+        let deadline = anyhow::Error::new(elapsed).context("Sending tx");
+        assert_eq!(classify(&deadline), Outcome::Failure);
     }
 
     #[test]
@@ -533,8 +566,43 @@ mod tests {
             clock + Duration::from_secs(11),
             Duration::from_secs(1),
         );
+        // Unknown neither extends nor breaks the streak.
+        assert_eq!(state.consecutive_failures, 2);
+        assert_eq!(state.failure_span, 3.0);
+        let g = state.start(13.0, clock + Duration::from_secs(12));
+        state.finish(
+            g,
+            Outcome::Failure,
+            14.0,
+            clock + Duration::from_secs(13),
+            Duration::from_secs(1),
+        );
+        assert_eq!(state.consecutive_failures, 3);
+        let h = state.start(15.0, clock + Duration::from_secs(14));
+        state.finish(
+            h,
+            Outcome::Success,
+            16.0,
+            clock + Duration::from_secs(15),
+            Duration::from_secs(1),
+        );
         assert_eq!(state.consecutive_failures, 0);
-        assert_eq!(state.outcomes, [1, 4, 1]);
+        assert_eq!(state.outcomes, [2, 5, 1]);
+    }
+
+    #[test]
+    fn pending_unknown_does_not_reset_streak() {
+        let clock = Instant::now();
+        let mut state = State::new(1.0, clock);
+        let a = state.start(1.0, clock);
+        state.finish(a, Outcome::Failure, 2.0, clock, Duration::ZERO);
+        let b = state.start(3.0, clock);
+        let c = state.start(4.0, clock);
+        // A later-started unknown completes while an older one is still in flight.
+        state.finish(c, Outcome::Unknown, 5.0, clock, Duration::ZERO);
+        assert_eq!(state.consecutive_failures, 1);
+        state.finish(b, Outcome::Failure, 6.0, clock, Duration::ZERO);
+        assert_eq!(state.consecutive_failures, 2);
     }
 
     #[test]
